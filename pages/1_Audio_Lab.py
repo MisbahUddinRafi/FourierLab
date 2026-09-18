@@ -1,11 +1,10 @@
 """
-app.py
+pages/1_Audio_Lab.py
 
-FourierLab -- Audio Module
-Streamlit front-end tying together core/ (DSP logic) and utils/ (I/O +
-plotting). Run with:
-
-    streamlit run app.py
+FourierLab -- Audio Spectrogram Module
+Educational Short-Time Fourier Transform (STFT) exploration workbench.
+Redesigned with refined scientific UI, grouped sidebar controls,
+flowchart ribbons, log-frequency spectrograms, and interactive sweeps.
 """
 
 from datetime import datetime
@@ -38,31 +37,25 @@ from audio_utils.plotting import (
     plot_retention_curve,
     plot_mask_overlay,
 )
-
+from ui_theme import (
+    apply_theme,
+    render_logo,
+    render_pipeline_flowchart,
+    render_quick_start,
+)
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIGURATION & THEME
 # ============================================================
 
 st.set_page_config(
-    page_title="FourierLab - Audio Spectrogram Lab",
+    page_title="Audio Lab | FourierLab",
     page_icon="🎧",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-st.title("FourierLab: Audio Frequency-Domain Explorer")
-
-st.markdown(
-    """
-    **Explore audio through its Short-Time Fourier Transform (STFT).**
-
-    Just like the MRI module treats k-space as measurement data you can
-    selectively acquire, this module treats the spectrogram as
-    frequency-domain data you can mask, threshold, and partially
-    reconstruct from -- while listening to the result.
-    """
-)
-
+apply_theme()
 
 # ============================================================
 # SAMPLE / SAVED-RESULT GALLERY FOLDERS
@@ -84,88 +77,134 @@ def save_audio_result(y_arr: np.ndarray, sr_val: int, label: str) -> Path:
 
 
 # ============================================================
-# SIDEBAR -- GLOBAL CONTROLS
+# SIDEBAR -- GROUPED CONTROLS
 # ============================================================
 
-st.sidebar.header("Audio & STFT Settings")
+render_logo("sidebar")
+
+st.sidebar.markdown(
+    """
+    <div style="font-size: 0.75rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;">
+        1. Audio Source
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 source_choice = st.sidebar.radio(
     "Audio source",
-    ["Upload my own", "Use a sample / saved result"],
+    ["Use a sample / saved result", "Upload my own"],
+    label_visibility="collapsed",
 )
 
 audio_source = None
 
 if source_choice == "Upload my own":
     audio_source = st.sidebar.file_uploader(
-        "Upload an audio clip",
+        "Upload audio file",
         type=["wav", "mp3", "flac", "ogg", "m4a"],
+        help="Upload a mono or stereo audio file.",
     )
 else:
-    # Samples and previously-saved results both show up here, so users
-    # can chain experiments (e.g. re-mask something they saved earlier).
+    # Samples and previously-saved results both show up here
     gallery_files = sorted(AUDIO_SAMPLES_DIR.glob("*.wav")) + sorted(AUDIO_SAVED_DIR.glob("*.wav"))
     if not gallery_files:
-        st.sidebar.warning("No sample/saved audio found. Add .wav files to assets/audio/samples/.")
+        st.sidebar.warning("No sample/saved audio found in assets/audio/samples/.")
     else:
         picked = st.sidebar.selectbox(
-            "Choose a clip",
+            "Choose audio clip",
             gallery_files,
-            format_func=lambda p: f"{p.stem}  ({'sample' if p.parent.name == 'samples' else 'saved'})",
+            format_func=lambda p: f"{'📁 ' if p.parent.name == 'samples' else '💾 '}{p.stem} ({p.parent.name})",
         )
         audio_source = str(picked)
+
+st.sidebar.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+st.sidebar.markdown(
+    """
+    <div style="font-size: 0.75rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;">
+        2. STFT Transform Settings
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 target_sr = st.sidebar.selectbox(
     "Analysis sample rate (Hz)",
     options=[16000, 22050, 44100],
     index=1,
-    help="Audio is resampled to this rate before analysis. Lower = faster, less high-frequency detail.",
+    help="Audio is resampled to this rate before analysis. Lower = faster computation.",
 )
-
-st.sidebar.subheader("STFT Parameters")
 
 n_fft = st.sidebar.select_slider(
     "FFT window size (n_fft)",
     options=[512, 1024, 2048, 4096],
     value=2048,
-    help="Larger = better frequency resolution, worse time resolution.",
+    help="Larger window = better frequency resolution, worse time resolution (Heisenberg-Gabor limit).",
 )
 
 hop_length = st.sidebar.select_slider(
-    "Hop length",
+    "Hop length (overlap step)",
     options=[128, 256, 512, 1024],
     value=512,
-    help="Samples between analysis frames. Smaller = smoother time resolution, more computation.",
+    help="Step size between analysis frames. Smaller = smoother time resolution.",
 )
 
-win_length = n_fft  # keep it simple: analysis window == FFT size
+win_length = n_fft
 
+st.sidebar.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+st.sidebar.markdown(
+    """
+    <div style="font-size: 0.75rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;">
+        3. Spectrogram Display
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+freq_scale_mode = st.sidebar.selectbox(
+    "Frequency scale",
+    options=["log", "linear"],
+    format_func=lambda s: "Log-frequency (perceptual hearing)" if s == "log" else "Linear frequency (standard FFT)",
+    help="Log scale matches human auditory pitch perception and expands low-to-mid voice & musical harmonics.",
+)
 
 # ============================================================
-# LOAD AUDIO
+# LOAD AUDIO & COMPUTE STFT
 # ============================================================
 
 if audio_source is None:
-    st.info("Upload an audio file, or choose a sample, from the sidebar to begin.")
+    render_logo("header", subtitle="Short-Time Fourier Transform (STFT) Analysis")
+    render_pipeline_flowchart("audio")
+    st.info("👋 Upload an audio file or select a clip from the sidebar to begin analysis.")
     st.stop()
 
 y, sr = load_audio(audio_source, target_sr=target_sr, mono=True)
 duration = len(y) / sr
 
-st.sidebar.success(f"Loaded: {duration:.2f}s @ {sr} Hz")
-
-
-# ============================================================
-# COMPUTE FULL STFT (shared across all tabs)
-# ============================================================
+# Sidebar metadata badge
+st.sidebar.markdown(
+    f"""
+    <div style="background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 10px; margin-top: 10px; font-size: 0.78rem; color: #cbd5e1;">
+        <div style="font-weight: 600; color: #38bdf8; margin-bottom: 4px;">Active Audio Signal</div>
+        <div>Duration: <strong>{duration:.2f} s</strong> ({len(y):,} samples)</div>
+        <div>Sample Rate: <strong>{sr} Hz</strong> (Nyquist: {sr//2} Hz)</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 D_full = compute_stft(y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
 magnitude_full, phase_full = magnitude_phase(D_full)
 magnitude_db_full = magnitude_to_db(magnitude_full)
-
 n_freq_bins, n_frames = D_full.shape
-freqs = frequency_axis(sr=sr, n_fft=n_fft)
 
+# ============================================================
+# HEADER & WORKFLOW RIBBON
+# ============================================================
+
+render_logo("header", subtitle="Time-Frequency Short-Time Fourier Transform (STFT) Explorer")
+render_pipeline_flowchart("audio")
+render_quick_start("Inspect waveform & log spectrogram", "Mask time-frequency regions", "Run retention sweeps & analyze SNR")
 
 # ============================================================
 # TABS
@@ -173,89 +212,103 @@ freqs = frequency_axis(sr=sr, n_fft=n_fft)
 
 tabs = st.tabs(
     [
-        "Overview",
-        "Spectrogram Analysis",
-        "Time-Frequency Masking",
-        "Progressive Reconstruction",
-        "Metrics",
+        "📊 Overview",
+        "⚖️ Magnitude vs. Phase",
+        "✂️ Time-Frequency Masking",
+        "📈 Progressive Reconstruction",
+        "🔬 Metrics & Analysis",
     ]
 )
-
 
 # ------------------------------------------------------------
 # TAB 1 -- OVERVIEW
 # ------------------------------------------------------------
 
 with tabs[0]:
+    st.markdown(
+        """
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+            <h3 style="margin: 0; color: #0f172a;">Signal Overview</h3>
+            <span style="font-size: 0.8rem; background: #e0e7ff; color: #3730a3; padding: 2px 10px; border-radius: 9999px; font-weight: 600;">
+                STFT Matrix: {0} bins &times; {1} frames
+            </span>
+        </div>
+        """.format(n_freq_bins, n_frames),
+        unsafe_allow_html=True,
+    )
 
-    st.header("Signal Overview")
+    col_audio, col_info = st.columns([2, 1])
+    with col_audio:
+        st.audio(waveform_to_wav_bytes(y, sr), format="audio/wav")
+    with col_info:
+        st.markdown(
+            f"""
+            <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 12px; font-size: 0.82rem; color: #475569;">
+                <div>Resolution: <strong>{sr / n_fft:.1f} Hz/bin</strong></div>
+                <div>Frame Step: <strong>{hop_length / sr * 1000:.1f} ms</strong></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    st.audio(waveform_to_wav_bytes(y, sr), format="audio/wav")
-
-    st.pyplot(plot_waveform(y, sr, title="Time-Domain Waveform"), use_container_width=True)
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.pyplot(plot_waveform(y, sr, title=f"Time-Domain Waveform ({duration:.2f} s)"), use_container_width=True)
 
     st.pyplot(
         plot_spectrogram(
             magnitude_db_full, sr, hop_length, n_fft,
-            title="STFT Magnitude Spectrogram (dB)",
+            title=f"STFT Magnitude Spectrogram ({freq_scale_mode.title()} Frequency Axis)",
+            freq_scale=freq_scale_mode,
         ),
         use_container_width=True,
     )
 
-    st.info(
+    st.markdown(
         """
-        The spectrogram is the audio equivalent of MRI k-space: it is a
-        2D frequency-domain representation (frequency vs. time here,
-        instead of spatial frequency vs. spatial frequency). Bright
-        horizontal bands are sustained tones or harmonics; vertical
-        streaks are transient, percussive events.
-        """
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #6366f1; border-radius: 8px; padding: 12px; font-size: 0.86rem; color: #334155; line-height: 1.5; margin-top: 10px;">
+            <strong>Frequency-Domain Interpretation:</strong> The STFT spectrogram is the audio counterpart of MRI k-space.
+            Horizontal energy bands represent sustained musical pitches or harmonic overtones; sharp vertical streaks represent transient percussive events.
+            The log-frequency scale visualizes lower acoustic formants with high clarity matching the human cochlea.
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-
 # ------------------------------------------------------------
-# TAB 2 -- SPECTROGRAM ANALYSIS (magnitude vs phase)
+# TAB 2 -- MAGNITUDE VS. PHASE
 # ------------------------------------------------------------
 
 with tabs[1]:
-
-    st.header("Magnitude vs. Phase")
-
+    st.markdown("### Magnitude vs. Phase Reconstruction")
     st.markdown(
         r"""
-        Every STFT bin is a complex number
-        $D(f,t) = |D(f,t)| \, e^{j\phi(f,t)}$.
-        The **magnitude** tells you how much energy is present; the
-        **phase** tells you the timing/alignment of that energy. Human
-        hearing is far more sensitive to magnitude than to phase, but
-        phase is still required to reconstruct an exact waveform.
+        Every STFT bin is a complex value $D(f,t) = |D(f,t)| \, e^{j\phi(f,t)}$.
+        The **magnitude** $|D|$ governs spectral energy and loudness; the **phase** $\phi$ encodes temporal alignment and interference.
+        In audio perception, magnitude carries the overwhelming majority of timbre and intelligible content.
         """
     )
 
     col1, col2 = st.columns(2)
-
     with col1:
         st.pyplot(
             plot_spectrogram(
                 magnitude_db_full, sr, hop_length, n_fft,
-                title="Magnitude Spectrogram (dB)",
+                title="Magnitude Spectrogram |D(f,t)| (dB)",
+                freq_scale=freq_scale_mode,
             ),
             use_container_width=True,
         )
-
     with col2:
         st.pyplot(
-            plot_phase(phase_full, sr, hop_length, title="Phase Spectrogram"),
+            plot_phase(phase_full, sr, hop_length, title="Phase Spectrogram φ(f,t)"),
             use_container_width=True,
         )
 
-    st.subheader("Reconstruct from magnitude-only vs. phase-only")
-
+    st.markdown("#### Diagnostic Reconstruction: Isolated Magnitude vs. Phase")
     st.caption(
-        "To isolate magnitude's contribution, phase is replaced with all "
-        "zeros. To isolate phase's contribution, magnitude is flattened "
-        "to a constant. Neither is a realistic signal -- this is a "
-        "diagnostic, not a usable reconstruction."
+        r"Magnitude-only reconstruction zeroes out phase ($\phi = 0$). "
+        r"Phase-only reconstruction flattens magnitude ($|D| = 1$). "
+        "Listen to hear which component dominates acoustic perception:"
     )
 
     magnitude_only_D = combine_magnitude_phase(magnitude_full, np.zeros_like(phase_full))
@@ -265,53 +318,72 @@ with tabs[1]:
     phase_only_y = compute_istft(phase_only_D, hop_length, win_length, length=len(y))
 
     col1, col2 = st.columns(2)
-
     with col1:
-        st.write("**Magnitude-only** (phase discarded)")
+        st.markdown(
+            """
+            <div class="lab-card lab-card-audio">
+                <div style="font-weight: 700; color: #0f172a; margin-bottom: 4px;">🔊 Magnitude-Only Reconstruction</div>
+                <div style="font-size: 0.8rem; color: #64748b; margin-bottom: 8px;">Phase zeroed &bull; Timbre and melody remain clear, slight smearing</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.audio(waveform_to_wav_bytes(magnitude_only_y, sr), format="audio/wav")
 
     with col2:
-        st.write("**Phase-only** (magnitude flattened)")
+        st.markdown(
+            """
+            <div class="lab-card lab-card-audio">
+                <div style="font-weight: 700; color: #0f172a; margin-bottom: 4px;">🔊 Phase-Only Reconstruction</div>
+                <div style="font-size: 0.8rem; color: #64748b; margin-bottom: 8px;">Magnitude flattened &bull; Sounds like harsh static/whisper noise</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.audio(waveform_to_wav_bytes(phase_only_y, sr), format="audio/wav")
 
+    st.info(
+        "💡 **Key Discovery:** In audio, human perception is overwhelmingly driven by magnitude. "
+        "Notice how different this is from the Image Lab, where *phase* carries structural shape and edges!"
+    )
 
 # ------------------------------------------------------------
 # TAB 3 -- TIME-FREQUENCY MASKING
 # ------------------------------------------------------------
 
 with tabs[2]:
-
-    st.header("Time-Frequency Masking")
-
+    st.markdown("### Time-Frequency Masking")
     st.markdown(
-        "Select a rectangular region of the spectrogram and either "
-        "**remove** it or **isolate** it, then reconstruct the audio."
+        "Select a bounding rectangle in the time-frequency plane to either **remove** (notch filter) or **isolate** (band-pass filter)."
     )
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns([1.5, 1.5, 1])
 
     with col1:
         freq_range = st.slider(
-            "Frequency range (Hz)",
+            "Frequency Range (Hz)",
             min_value=0,
             max_value=int(sr / 2),
             value=(0, int(sr / 4)),
+            step=50,
         )
 
     with col2:
         time_range = st.slider(
-            "Time range (s)",
+            "Time Interval (s)",
             min_value=0.0,
             max_value=float(duration),
             value=(0.0, float(duration)),
+            step=0.05,
         )
 
-    mask_mode = st.radio(
-        "Mask mode",
-        ["remove", "isolate"],
-        horizontal=True,
-        help="'remove' zeroes out the selected region; 'isolate' keeps only the selected region.",
-    )
+    with col3:
+        mask_mode = st.radio(
+            "Action Mode",
+            ["remove", "isolate"],
+            format_func=lambda m: "❌ Remove Region" if m == "remove" else "🎯 Isolate Region",
+            help="'remove' zeroes the selected area; 'isolate' zeroes out everything outside it.",
+        )
 
     keep_mask = build_time_freq_mask(
         shape=D_full.shape,
@@ -327,62 +399,64 @@ with tabs[2]:
     y_masked = compute_istft(D_masked, hop_length, win_length, length=len(y))
 
     st.pyplot(
-        plot_mask_overlay(magnitude_db_full, keep_mask, sr, hop_length, title="Selected Region (dimmed = removed)"),
+        plot_mask_overlay(
+            magnitude_db_full, keep_mask, sr, hop_length,
+            title=f"Selected Region ({mask_mode.title()}) -- Dimmed Area Removed",
+        ),
         use_container_width=True,
     )
 
     col1, col2 = st.columns(2)
-
     with col1:
-        st.write("**Original**")
+        st.markdown("**Original Audio**")
         st.audio(waveform_to_wav_bytes(y, sr), format="audio/wav")
 
     with col2:
-        st.write("**Masked reconstruction**")
+        st.markdown(f"**Masked Reconstruction ({mask_mode.title()})**")
         st.audio(waveform_to_wav_bytes(y_masked, sr), format="audio/wav")
 
-    masked_snr = snr_db(y, y_masked)
-    st.metric("SNR after masking", f"{masked_snr:.2f} dB" if np.isfinite(masked_snr) else "∞")
-
-    if st.button("💾 Save masked reconstruction to gallery", key="save_masked_audio"):
-        saved_path = save_audio_result(y_masked, sr, f"masked_{mask_mode}")
-        st.success(f"Saved to assets/audio/saved/{saved_path.name}")
-
+    col_m1, col_m2 = st.columns([1, 2])
+    with col_m1:
+        masked_snr = snr_db(y, y_masked)
+        st.metric("Signal-to-Noise Ratio (SNR)", f"{masked_snr:.2f} dB" if np.isfinite(masked_snr) else "∞ dB")
+    with col_m2:
+        st.markdown("<div style='height: 18px;'></div>", unsafe_allow_html=True)
+        if st.button("💾 Save masked reconstruction to gallery", key="save_masked_audio", use_container_width=True):
+            saved_path = save_audio_result(y_masked, sr, f"masked_{mask_mode}")
+            st.success(f"Saved: assets/audio/saved/{saved_path.name}")
 
 # ------------------------------------------------------------
 # TAB 4 -- PROGRESSIVE RECONSTRUCTION
 # ------------------------------------------------------------
 
 with tabs[3]:
-
-    st.header("Progressive Reconstruction")
-
+    st.markdown("### Progressive Reconstruction")
     st.markdown(
         """
-        Keep only a fraction of the frequency-domain information and
-        reconstruct. This mirrors the MRI module's "acquisition
-        percentage" experiments: less retained data generally means
-        worse reconstruction, but *how* it degrades depends on
-        *which* data you keep.
+        Simulate data compression and band-limiting by retaining only a specific fraction of frequency bins.
+        This mirrors undersampled MRI acquisition: see how perceptual audio quality changes as data is progressively truncated.
         """
     )
 
-    strategy = st.selectbox(
-        "Retention strategy",
-        ["low_frequency", "top_magnitude"],
-        format_func=lambda s: {
-            "low_frequency": "Low-frequency retention (band-limit, like keeping k-space center)",
-            "top_magnitude": "Top-magnitude retention (keep loudest bins anywhere)",
-        }[s],
-    )
-
-    keep_fraction = st.slider(
-        "Fraction of data retained",
-        min_value=0.01,
-        max_value=1.0,
-        value=0.30,
-        step=0.01,
-    )
+    col1, col2 = st.columns([1.5, 1.5])
+    with col1:
+        strategy = st.selectbox(
+            "Retention strategy",
+            ["low_frequency", "top_magnitude"],
+            format_func=lambda s: {
+                "low_frequency": "Low-frequency retention (band-limiting, mirrors k-space center)",
+                "top_magnitude": "Top-magnitude retention (compressive sensing / sparse energy)",
+            }[s],
+        )
+    with col2:
+        keep_fraction = st.slider(
+            "Fraction of data retained",
+            min_value=0.01,
+            max_value=1.0,
+            value=0.30,
+            step=0.01,
+            format="%.2f",
+        )
 
     if strategy == "low_frequency":
         D_retained = retain_low_frequencies(D_full, keep_fraction)
@@ -395,65 +469,68 @@ with tabs[3]:
     st.pyplot(
         plot_spectrogram(
             magnitude_retained_db, sr, hop_length, n_fft,
-            title=f"Retained Spectrogram ({keep_fraction * 100:.0f}% kept)",
+            title=f"Retained Spectrogram ({keep_fraction * 100:.0f}% Kept -- {strategy.replace('_', ' ').title()})",
+            freq_scale=freq_scale_mode,
         ),
         use_container_width=True,
     )
 
     col1, col2 = st.columns(2)
-
     with col1:
-        st.write("**Original**")
+        st.markdown("**Original Reference**")
         st.audio(waveform_to_wav_bytes(y, sr), format="audio/wav")
-
     with col2:
-        st.write(f"**Reconstructed ({keep_fraction * 100:.0f}% retained)**")
+        st.markdown(f"**Reconstructed ({keep_fraction * 100:.0f}% Data Retained)**")
         st.audio(waveform_to_wav_bytes(y_retained, sr), format="audio/wav")
 
-    retained_snr = snr_db(y, y_retained)
-    st.metric("SNR", f"{retained_snr:.2f} dB" if np.isfinite(retained_snr) else "∞")
+    col_ret_m, col_ret_b = st.columns([1, 2])
+    with col_ret_m:
+        retained_snr = snr_db(y, y_retained)
+        st.metric("Reconstruction SNR", f"{retained_snr:.2f} dB" if np.isfinite(retained_snr) else "∞ dB")
+    with col_ret_b:
+        st.markdown("<div style='height: 18px;'></div>", unsafe_allow_html=True)
+        if st.button("💾 Save reconstruction to gallery", key="save_retained_audio", use_container_width=True):
+            saved_path = save_audio_result(y_retained, sr, f"retained_{strategy}_{int(keep_fraction*100)}pct")
+            st.success(f"Saved: assets/audio/saved/{saved_path.name}")
 
-    if st.button("💾 Save reconstruction to gallery", key="save_retained_audio"):
-        saved_path = save_audio_result(y_retained, sr, f"retained_{strategy}_{int(keep_fraction*100)}pct")
-        st.success(f"Saved to assets/audio/saved/{saved_path.name}")
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    st.markdown("#### Quality vs. Data Retention Sweep")
+    st.caption("Compute reconstruction SNR across multiple retention fractions to evaluate compression efficiency.")
 
-    st.divider()
-    st.subheader("Quality vs. Retention Curve")
-
-    if st.button("Run retention sweep (may take a few seconds)"):
-
-        fractions = [0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0]
+    if st.button("🚀 Run Retention Sweep Analysis", use_container_width=True):
+        fractions = [0.05, 0.10, 0.20, 0.30, 0.50, 0.70, 0.90, 1.0]
+        progress_bar = st.progress(0, text="Starting retention sweep...")
 
         sweep_results = retention_sweep(D_full, strategy, fractions)
-
         snr_values = []
-        for frac, D_variant in sweep_results:
+
+        for idx, (frac, D_variant) in enumerate(sweep_results):
             y_variant = compute_istft(D_variant, hop_length, win_length, length=len(y))
             snr_values.append(snr_db(y, y_variant))
+            pct = int((idx + 1) / len(sweep_results) * 100)
+            progress_bar.progress(pct, text=f"Evaluating retention fraction: {int(frac*100)}%...")
 
-        # Cap infinite SNR for plotting purposes.
-        finite_max = max([v for v in snr_values if np.isfinite(v)], default=60)
+        progress_bar.empty()
+
+        finite_max = max([v for v in snr_values if np.isfinite(v)], default=60.0)
         snr_plot_values = [v if np.isfinite(v) else finite_max * 1.1 for v in snr_values]
 
         st.pyplot(
             plot_retention_curve(
                 fractions, snr_plot_values,
                 ylabel="SNR (dB)",
-                title=f"Reconstruction Quality vs. Data Retained ({strategy})",
+                title=f"Reconstruction Quality vs. Data Retained ({strategy.replace('_', ' ').title()})",
             ),
             use_container_width=True,
         )
-
 
 # ------------------------------------------------------------
 # TAB 5 -- METRICS
 # ------------------------------------------------------------
 
 with tabs[4]:
-
-    st.header("Quantitative Comparison")
-
-    st.markdown("Compare the **original** signal against the **masked** result from the Masking tab.")
+    st.markdown("### Quantitative Fidelity Metrics")
+    st.markdown("Evaluating mathematical fidelity between the **Original Reference** and current **Masked Audio**.")
 
     m_snr = snr_db(y, y_masked)
     m_mse = mse(y, y_masked)
@@ -462,35 +539,45 @@ with tabs[4]:
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric("SNR", f"{m_snr:.2f} dB" if np.isfinite(m_snr) else "∞")
-
+        st.metric(
+            label="Signal-to-Noise Ratio (SNR)",
+            value=f"{m_snr:.2f} dB" if np.isfinite(m_snr) else "∞ dB",
+            help="Higher is better. Measures relative signal strength versus residual error in decibels.",
+        )
     with col2:
-        st.metric("MSE", f"{m_mse:.6f}")
-
+        st.metric(
+            label="Mean Squared Error (MSE)",
+            value=f"{m_mse:.6f}",
+            help="Lower is better (0 = identical). Average squared sample-by-sample difference in time domain.",
+        )
     with col3:
-        st.metric("Spectral Convergence", f"{m_spec_conv:.4f}")
+        st.metric(
+            label="Spectral Convergence",
+            value=f"{m_spec_conv:.4f}",
+            help="Lower is better (0 = identical). Measures normalized Frobenius norm error in magnitude spectrogram.",
+        )
 
     st.markdown(
         """
-        **SNR (Signal-to-Noise Ratio)** -- higher is better; measures
-        how much of the original waveform survives, in decibels.
-
-        **MSE (Mean Squared Error)** -- lower is better; average
-        squared sample-by-sample difference in the time domain.
-
-        **Spectral Convergence** -- lower is better (0 = identical);
-        measures error directly in the magnitude-spectrogram domain,
-        which is where we've actually been making changes.
-        """
+        <div class="lab-card lab-card-neutral" style="margin-top: 1.25rem;">
+            <div style="font-size: 0.9rem; font-weight: 700; color: #0f172a; margin-bottom: 6px;">Metric Interpretations:</div>
+            <ul style="color: #475569; font-size: 0.85rem; line-height: 1.6; margin-bottom: 0;">
+                <li><strong>SNR (Signal-to-Noise Ratio):</strong> Standard acoustic benchmark. Above 20 dB indicates high perceptual fidelity; below 5 dB indicates severe attenuation or distortion.</li>
+                <li><strong>MSE (Mean Squared Error):</strong> Quantifies sample-level divergence in the time domain, strictly penalizing large temporal phase misalignments.</li>
+                <li><strong>Spectral Convergence:</strong> Direct frequency-domain evaluation: $\\| |D| - |D'| \\|_F / \\| |D| \\|_F$. Insensitive to inaudible phase shifts, reflecting true spectral envelope retention.</li>
+            </ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-
 
 # ============================================================
 # FOOTER
 # ============================================================
 
+st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True)
 st.divider()
 st.caption(
-    "FourierLab Audio Module -- educational STFT/ISTFT signal processing demo. "
-    "Not intended for production audio engineering use."
+    "FourierLab Audio Module &bull; Educational STFT/iSTFT Signal Processing Workbench &bull; "
+    "Calculations executed via NumPy, SciPy, and Librosa."
 )
