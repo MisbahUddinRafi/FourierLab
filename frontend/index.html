@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FourierLab</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <img src="assets/logo.png" alt="" class="logo-img" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+    <div class="logo-fallback" style="display:none;">FL</div>
+    <div class="brand-name">Fourier<span>Lab</span></div>
+  </div>
+  <nav class="topnav">
+    <a href="index.html" class="active">Home</a>
+    <a href="image-lab.html">Image Lab</a>
+    <a href="audio-lab.html">Audio Lab</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <div>
+    <div class="hero-eyebrow">SIGNAL PROCESSING WORKBENCH</div>
+    <h1>See what lives in<br>the <span class="accent">frequency domain</span></h1>
+    <p class="hero-sub">
+      Mask it, retain a fraction of it, split magnitude from phase —
+      then watch the image or audio come back together.
+    </p>
+    <div class="hero-actions">
+      <a href="image-lab.html" class="btn btn-primary">Enter Image Lab</a>
+      <a href="audio-lab.html" class="btn btn-ghost">Enter Audio Lab</a>
+    </div>
+  </div>
+  <div class="scope-wrap">
+    <canvas id="heroScope"></canvas>
+    <div class="scope-label">
+      <span><span class="live-dot"></span>LIVE TRACE</span>
+      <span>CH1 &middot; AMPLITUDE</span>
+    </div>
+  </div>
+</section>
+
+<div class="pipeline">
+  <div class="pipeline-rail">
+    <div class="pipeline-pulse"></div>
+    <div class="pipeline-node"><b>Signal</b>image / audio</div>
+    <div class="pipeline-node"><b>Transform</b>FFT / STFT</div>
+    <div class="pipeline-node"><b>Frequency Domain</b>magnitude + phase</div>
+    <div class="pipeline-node"><b>Mask / Retain</b>keep a fraction</div>
+    <div class="pipeline-node"><b>Inverse</b>reconstruct</div>
+    <div class="pipeline-node"><b>Output</b>compare + measure</div>
+  </div>
+</div>
+
+<div class="tiles">
+  <a href="image-lab.html" class="tile tile-mri">
+    <div class="tile-top">
+      <div class="tile-title">Image Lab</div>
+      <div class="tile-domain">k-SPACE</div>
+    </div>
+    <div class="tile-visual"><canvas id="mriTileCanvas" style="width:100%; height:100%;"></canvas></div>
+    <div class="tile-chips">
+      <span>phantom</span><span>center / outer mask</span><span>PSNR &middot; SSIM</span>
+    </div>
+  </a>
+
+  <a href="audio-lab.html" class="tile tile-audio">
+    <div class="tile-top">
+      <div class="tile-title">Audio Lab</div>
+      <div class="tile-domain">STFT</div>
+    </div>
+    <div class="tile-visual"><canvas id="audioTileCanvas" style="width:100%; height:100%;"></canvas></div>
+    <div class="tile-chips">
+      <span>spectrogram</span><span>time-freq mask</span><span>SNR</span>
+    </div>
+  </a>
+</div>
+
+<div class="glossary">
+  <div class="gloss-item">
+    <div class="gloss-icon">◐</div>
+    <div class="gloss-label">Magnitude</div>
+    <div class="gloss-tip">Energy at each frequency — mostly contrast in images, loudness in audio.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-icon">◑</div>
+    <div class="gloss-label">Phase</div>
+    <div class="gloss-tip">Alignment of each frequency — carries most of an image's structure, but little of what you hear.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-icon">◒</div>
+    <div class="gloss-label">Retention</div>
+    <div class="gloss-tip">Reconstructing from a fraction of the data — the core experiment in both labs.</div>
+  </div>
+</div>
+
+<div class="site-footer">FourierLab &middot; signal processing demonstration</div>
+
+<script src="js/animations.js"></script>
+<script src="js/api.js"></script>
+<script>
+  drawScope("heroScope");
+  drawRadialSweep("mriTileCanvas");
+  drawSpectrumBars("audioTileCanvas");
+</script>
+</body>
+</html>
