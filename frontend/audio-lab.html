@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FourierLab &middot; Audio Lab</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <img src="assets/logo.png" alt="" class="logo-img" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+    <div class="logo-fallback" style="display:none;">FL</div>
+    <div class="brand-name">Fourier<span>Lab</span></div>
+  </div>
+  <nav class="topnav">
+    <a href="index.html">Home</a>
+    <a href="image-lab.html">Image Lab</a>
+    <a href="audio-lab.html" class="active">Audio Lab</a>
+  </nav>
+</header>
+
+<div class="app-layout">
+
+  <aside class="sidebar">
+
+    <div class="sidebar-group">
+      <div class="sidebar-title">Source</div>
+      <div class="radio-group">
+        <label class="radio-option"><input type="radio" name="sourceMode" value="upload" checked> Upload</label>
+        <label class="radio-option"><input type="radio" name="sourceMode" value="sample"> Sample</label>
+        <label class="radio-option"><input type="radio" name="sourceMode" value="saved"> Saved result</label>
+      </div>
+
+      <div id="sourcePanel_upload" class="source-panel" style="margin-top:12px;">
+        <input type="file" id="uploadInput" accept=".wav,.mp3,.flac,.ogg,.m4a,.mp4,audio/*">
+      </div>
+      <div id="sourcePanel_sample" class="source-panel" style="display:none; margin-top:12px;">
+        <select id="sampleSelect"></select>
+      </div>
+      <div id="sourcePanel_saved" class="source-panel" style="display:none; margin-top:12px;">
+        <select id="savedSelect"></select>
+      </div>
+    </div>
+
+    <div class="sidebar-group">
+      <div class="sidebar-title">STFT Settings</div>
+      <div class="field">
+        <label class="field-label">Sample Rate</label>
+        <select id="srSelect">
+          <option value="16000">16000 Hz</option>
+          <option value="22050" selected>22050 Hz</option>
+          <option value="44100">44100 Hz</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label">n_fft</label>
+        <select id="nfftSelect">
+          <option value="512">512</option>
+          <option value="1024">1024</option>
+          <option value="2048" selected>2048</option>
+          <option value="4096">4096</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label">Hop Length</label>
+        <select id="hopSelect">
+          <option value="128">128</option>
+          <option value="256">256</option>
+          <option value="512" selected>512</option>
+          <option value="1024">1024</option>
+        </select>
+      </div>
+      <button id="analyzeBtn" class="btn btn-primary btn-block">Analyze</button>
+    </div>
+
+    <div id="statusBox" class="status-msg" style="display:none;"></div>
+    <div id="sidebarReadout" class="sidebar-readout"></div>
+
+  </aside>
+
+  <main class="content">
+
+    <div id="emptyState" class="empty-state">
+      Choose a source on the left and click <b>Analyze</b> to begin.
+    </div>
+
+    <div id="labBody" style="display:none;">
+
+      <div class="lab-tabs">
+        <button class="lab-tab active" data-target="tabOverview" disabled>Overview</button>
+        <button class="lab-tab" data-target="tabMagPhase" disabled>Magnitude &amp; Phase</button>
+        <button class="lab-tab" data-target="tabMasking" disabled>Masking</button>
+        <button class="lab-tab" data-target="tabRetention" disabled>Retention</button>
+        <button class="lab-tab" data-target="tabMetrics" disabled>Metrics</button>
+      </div>
+
+      <div id="tabOverview" class="lab-panel active">
+        <div class="plot-card">
+          <div class="plot-card-head"><div class="plot-card-title">Waveform</div></div>
+          <div id="waveformPlot"></div>
+        </div>
+        <div class="plot-card">
+          <div class="plot-card-head">
+            <div class="plot-card-title">Spectrogram</div>
+            <div class="plot-toggle-group freq-scale-toggle">
+              <button class="plot-toggle active" data-scale="linear">Linear</button>
+              <button class="plot-toggle" data-scale="log">Log</button>
+            </div>
+          </div>
+          <div id="overviewSpectrogram"></div>
+        </div>
+        <div class="player-row">
+          <div class="player-block">
+            <div class="player-block-label">Original audio</div>
+            <audio id="originalPlayer" controls></audio>
+          </div>
+        </div>
+      </div>
+
+      <div id="tabMagPhase" class="lab-panel">
+        <div class="plot-row">
+          <div class="plot-card">
+            <div class="plot-card-head"><div class="plot-card-title">Magnitude (dB)</div></div>
+            <div id="magSpectrogram"></div>
+          </div>
+          <div class="plot-card">
+            <div class="plot-card-head"><div class="plot-card-title">Phase (rad)</div></div>
+            <div id="phasePlot"></div>
+          </div>
+        </div>
+        <div class="plot-hint">Magnitude carries loudness; phase carries timing/alignment. Generate each below and compare by ear.</div>
+        <div class="player-row">
+          <div class="player-block">
+            <button id="magOnlyBtn" class="btn btn-outline-cyan btn-sm">Generate magnitude-only</button>
+            <div class="player-block-label" style="margin-top:10px;">Magnitude-only playback</div>
+            <audio id="magOnlyPlayer" controls></audio>
+          </div>
+          <div class="player-block">
+            <button id="phaseOnlyBtn" class="btn btn-outline-violet btn-sm">Generate phase-only</button>
+            <div class="player-block-label" style="margin-top:10px;">Phase-only playback</div>
+            <audio id="phaseOnlyPlayer" controls></audio>
+          </div>
+        </div>
+      </div>
+
+      <div id="tabMasking" class="lab-panel">
+        <div class="plot-card">
+          <div class="plot-card-head"><div class="plot-card-title">Drag a box on the spectrogram to select a region</div></div>
+          <div id="maskSpectrogram"></div>
+        </div>
+
+        <div class="mask-controls">
+          <div class="field"><label class="field-label">Freq min (Hz)</label><input type="number" id="freqMin" value="0"></div>
+          <div class="field"><label class="field-label">Freq max (Hz)</label><input type="number" id="freqMax" value="11025"></div>
+          <div class="field"><label class="field-label">Time min (s)</label><input type="number" id="timeMin" value="0" step="0.1"></div>
+          <div class="field"><label class="field-label">Time max (s)</label><input type="number" id="timeMax" value="3" step="0.1"></div>
+        </div>
+
+        <div class="action-row">
+          <div class="radio-group" style="flex-direction:row; gap:16px;">
+            <label class="radio-option"><input type="radio" name="maskMode" value="remove" checked> Remove region</label>
+            <label class="radio-option"><input type="radio" name="maskMode" value="isolate"> Isolate region</label>
+          </div>
+          <button id="applyMaskBtn" class="btn btn-primary btn-sm">Apply Mask</button>
+          <button id="saveMaskBtn" class="btn btn-ghost btn-sm">Save to gallery</button>
+        </div>
+
+        <div class="plot-card">
+          <div class="plot-card-head"><div class="plot-card-title">Result spectrogram</div></div>
+          <div id="maskResultSpectrogram"></div>
+        </div>
+
+        <div id="maskReadouts" class="readout-row"></div>
+
+        <div class="player-row">
+          <div class="player-block">
+            <div class="player-block-label">Masked reconstruction</div>
+            <audio id="maskedPlayer" controls></audio>
+          </div>
+        </div>
+      </div>
+
+      <div id="tabRetention" class="lab-panel">
+        <div class="action-row">
+          <div class="field" style="min-width:260px;">
+            <label class="field-label">Strategy</label>
+            <select id="strategySelect">
+              <option value="low_frequency">Low-frequency (band-limit)</option>
+              <option value="top_magnitude">Top-magnitude (loudest bins)</option>
+            </select>
+          </div>
+          <div class="field" style="flex:1; min-width:220px;">
+            <label class="field-label">Fraction retained: <span id="fractionLabel">30%</span></label>
+            <input type="range" id="fractionSlider" min="0.01" max="1" step="0.01" value="0.3">
+          </div>
+          <button id="applyRetentionBtn" class="btn btn-primary btn-sm">Reconstruct</button>
+          <button id="saveRetainBtn" class="btn btn-ghost btn-sm">Save to gallery</button>
+          <button id="sweepBtn" class="btn btn-outline-cyan btn-sm">Run Sweep</button>
+        </div>
+
+        <div class="plot-row">
+          <div class="plot-card">
+            <div class="plot-card-head"><div class="plot-card-title">Original</div></div>
+            <div id="retainSpectrogram"></div>
+          </div>
+          <div class="plot-card">
+            <div class="plot-card-head"><div class="plot-card-title">Retained</div></div>
+            <div id="retainResultSpectrogram"></div>
+          </div>
+        </div>
+
+        <div id="retainReadout" class="readout-row"></div>
+
+        <div class="player-row">
+          <div class="player-block">
+            <div class="player-block-label">Reconstructed audio</div>
+            <audio id="retainedPlayer" controls></audio>
+          </div>
+        </div>
+
+        <div class="plot-card">
+          <div class="plot-card-head"><div class="plot-card-title">Quality vs. Retention Sweep</div></div>
+          <div id="sweepChart"></div>
+        </div>
+      </div>
+
+      <div id="tabMetrics" class="lab-panel">
+        <div class="plot-hint">Metrics from the most recent Masking-tab result.</div>
+        <div id="metricsBody"></div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/audio-lab.js"></script>
+</body>
+</html>

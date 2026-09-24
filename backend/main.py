@@ -12,10 +12,10 @@ for sub in ["audio/samples", "audio/saved", "images/samples", "images/saved"]:
 
 app = FastAPI(title="FourierLab API")
 
-# routers get added here in later phases:
-# from routes.audio_routes import router as audio_router
+from routes.audio_routes import router as audio_router
+app.include_router(audio_router, prefix="/api/audio")
+
 # from routes.image_routes import router as image_router
-# app.include_router(audio_router, prefix="/api/audio")
 # app.include_router(image_router, prefix="/api/image")
 
 app.mount("/media", StaticFiles(directory=ASSETS_DIR), name="media")
