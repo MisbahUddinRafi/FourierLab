@@ -558,23 +558,26 @@ async function runAnalyze() {
     }
 }
 
-async function setAudioFromSource() {
+function setAudioFromSource() {
     const audioSrc = "/media/audio/" + state.source;
 
-    // Overview
-    el("originalPlayer").src = audioSrc;
+    const playerIds = [
+        "originalPlayer",
+        "magPhaseOriginalPlayer",
+        "phaseOriginalPlayer",
+        "maskOriginalPlayer",
+        "retentionOriginalPlayer",
+    ];
 
-    // Magnitude section
-    el("magPhaseOriginalPlayer").src = audioSrc;
+    playerIds.forEach((id) => {
+        const player = el(id);
 
-    // Phase section
-    el("phaseOriginalPlayer").src = audioSrc;
+        if (!player) return;
 
-    // Masking
-    el("maskOriginalPlayer").src = audioSrc;
-
-    // Retention
-    el("retentionOriginalPlayer").src = audioSrc;
+        player.pause();
+        player.src = audioSrc;
+        player.load();
+    });
 }
 
 async function apiPost_json(path, body) {
@@ -621,17 +624,39 @@ async function applyMask() {
             time_min: parseFloat(el("timeMin").value), time_max: parseFloat(el("timeMax").value),
             mode,
         };
+        
         const data = await apiPost_json("/audio/mask", req);
         state.lastMask = data;
 
-        renderSpectrogram("maskResultSpectrogram", state.lastAnalyze.freqs, state.lastAnalyze.times, data.magnitude_db, { selectable: false });
-        el("maskedPlayer").src = "data:audio/wav;base64," + data.audio_base64;
+        renderSpectrogram(
+            "maskResultSpectrogram",
+            state.lastAnalyze.freqs,
+            state.lastAnalyze.times,
+            data.magnitude_db,
+            { selectable: false }
+        );
+
+        const maskedPlayer = el("maskedPlayer");
+        maskedPlayer.src = "data:audio/wav;base64," + data.audio_base64;
+        maskedPlayer.load();
 
         el("maskReadouts").innerHTML = `
-      <div class="readout"><div class="readout-label">SNR</div><div class="readout-value">${fmt(data.snr_db, 2, " dB")}</div></div>
-      <div class="readout"><div class="readout-label">MSE</div><div class="readout-value">${data.mse.toFixed(6)}</div></div>
-      <div class="readout"><div class="readout-label">Spectral Conv.</div><div class="readout-value">${data.spectral_convergence.toFixed(4)}</div></div>
-    `;
+            <div class="readout">
+                <div class="readout-label">SNR</div>
+                <div class="readout-value">${fmt(data.snr_db, 2, " dB")}</div>
+            </div>
+
+            <div class="readout">
+                <div class="readout-label">MSE</div>
+                <div class="readout-value">${data.mse.toFixed(6)}</div>
+            </div>
+
+            <div class="readout">
+                <div class="readout-label">Spectral Conv.</div>
+                <div class="readout-value">${data.spectral_convergence.toFixed(4)}</div>
+            </div>
+        `;
+
         updateMetricsTab(data);
         setStatus("Mask applied", "success");
     } catch (err) {
