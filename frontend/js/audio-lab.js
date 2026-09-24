@@ -9,6 +9,13 @@ const state = {
     lastMask: null,
     lastRetain: null,
     freqScale: "linear",
+
+    // ---------------------------------------------------------
+    // Interactive masking state
+    // ---------------------------------------------------------
+    maskRegions: [],
+    selectedMaskRegionId: null,
+    maskInteractionMode: "edit",
 };
 
 
@@ -145,37 +152,189 @@ function renderWaveform(containerId, waveform) {
     });
 }
 
-function renderSpectrogram(containerId, freqs, times, magnitude_db, options = {}) {
+function renderSpectrogram(
+    containerId,
+    freqs,
+    times,
+    magnitude_db,
+    options = {}
+) {
     const trace = {
-        x: times, y: freqs, z: magnitude_db,
-        type: "heatmap", colorscale: MAGNITUDE_COLORSCALE,
+        x: times,
+        y: freqs,
+        z: magnitude_db,
+
+        type: "heatmap",
+
+        colorscale:
+            options.colorscale || MAGNITUDE_COLORSCALE,
+
         zsmooth: "best",
-        colorbar: { title: "dB", titleside: "right", tickfont: { size: 10 }, thickness: 12 },
+
+        colorbar: {
+            title: options.colorbarTitle || "dB",
+            titleside: "right",
+            tickfont: {
+                size: 10,
+            },
+            thickness: 12,
+        },
     };
+
+
+    const isMaskPlot =
+        containerId === "maskSpectrogram";
+
+
+    let dragmode = "zoom";
+
+    if (isMaskPlot) {
+        dragmode = "false";
+    } else if (options.selectable) {
+        dragmode = "select";
+    }
+
+
     const layout = baseLayout({
-        xaxis: { title: "Time (s)" },
-        yaxis: { title: "Frequency (Hz)", type: state.freqScale },
+
+        xaxis: {
+            title: "Time (s)",
+        },
+
+        yaxis: {
+            title: "Frequency (Hz)",
+            type: state.freqScale,
+        },
+
         height: 320,
-        dragmode: options.selectable ? "select" : "zoom",
+
+        dragmode,
+
+        /*
+         * Allows clicks anywhere in the plotting area.
+         * We do not rely on this for shape selection itself;
+         * the masking system also listens directly to the
+         * SVG shape layer.
+         */
+        clickmode: "event",
+
+        clickanywhere: true,
+
+        /*
+         * Styling for Plotly-created rectangles.
+         */
+        newshape: {
+            type: "rect",
+
+            line: {
+                color: "#F5A623",
+                width: 2,
+            },
+
+            fillcolor: "rgba(245, 166, 35, 0.10)",
+
+            opacity: 0.32,
+
+            layer: "above",
+        },
+
+        /*
+         * Avoid Plotly's default bright-magenta active shape.
+         */
+        activeshape: {
+            fillcolor: "rgba(245, 166, 35, 0.12)",
+            opacity: 0.55,
+        },
+
+        /*
+         * Keep shape edits stable while the user interacts.
+         */
+        editrevision: "mask-regions",
     });
 
 
-    Plotly.newPlot(containerId, [trace], layout, {
+    const config = {
         displayModeBar: true,
+
         responsive: true,
-        modeBarButtonsToRemove: ["lasso2d"]
-    }).then(() => {
-        if (playbackState.activePlayer) {
-            updatePlotPlayback(containerId, playbackState.activePlayer.currentTime || 0);
+
+        modeBarButtonsToRemove: [
+            "lasso2d",
+        ],
+
+        /*
+         * Only expose drawrect for the masking plot.
+         * The actual interaction mode is controlled by our
+         * Edit/Add buttons.
+         */
+        modeBarButtonsToAdd: [],
+    };
+
+
+    Plotly.newPlot(
+        containerId,
+        [trace],
+        layout,
+        config
+    ).then(() => {
+
+        if (
+            playbackState.activePlayer
+        ) {
+            updatePlotPlayback(
+                containerId,
+                playbackState.activePlayer.currentTime || 0
+            );
+        }
+
+
+        if (isMaskPlot) {
+
+            attachMaskShapeClickHandler();
+
+            const plot =
+                el("maskSpectrogram");
+
+            plot.on(
+                "plotly_relayout",
+                handleMaskRelayout
+            );
+
+            /*
+             * Initial region state.
+             */
+            renderMaskRegionShapes();
+
+            setMaskInteractionMode(
+                state.maskInteractionMode
+            );
+        }
+
+
+        if (options.onSelect) {
+
+            const plot =
+                document.getElementById(containerId);
+
+            plot.on(
+                "plotly_selected",
+                (evt) => {
+
+                    if (
+                        !evt ||
+                        !evt.range
+                    ) {
+                        return;
+                    }
+
+                    options.onSelect(
+                        evt.range.x,
+                        evt.range.y
+                    );
+                }
+            );
         }
     });
-
-    if (options.onSelect) {
-        document.getElementById(containerId).on("plotly_selected", (evt) => {
-            if (!evt || !evt.range) return;
-            options.onSelect(evt.range.x, evt.range.y);
-        });
-    }
 }
 
 function renderPhase(containerId, freqs, times, phase) {
@@ -250,72 +409,131 @@ function updatePlaybackCursor() {
 
 
 function updatePlotPlayback(plotId, currentTime) {
+
     const plot = el(plotId);
 
-    if (!plot || !plot.data || !plot.layout) return;
-
-    const duration = playbackState.activePlayer?.duration;
-
-    if (!duration || !Number.isFinite(duration) || duration <= 0) {
+    if (
+        !plot ||
+        !plot.data ||
+        !plot.layout
+    ) {
         return;
     }
 
+
+    const duration =
+        playbackState.activePlayer?.duration;
+
+    if (
+        !duration ||
+        !Number.isFinite(duration) ||
+        duration <= 0
+    ) {
+        return;
+    }
+
+
     const xaxis = plot.layout.xaxis;
 
-    if (!xaxis) return;
+    if (!xaxis) {
+        return;
+    }
+
 
     const range = xaxis.range;
 
-    if (!range || range.length < 2) return;
+    if (
+        !range ||
+        range.length < 2
+    ) {
+        return;
+    }
+
 
     const xMin = range[0];
     const xMax = range[1];
 
-    // Keep the cursor inside the displayed time range.
-    const x = Math.max(xMin, Math.min(currentTime, xMax));
-
-    const shapes = plot.layout.shapes || [];
-
-    // Preserve any existing shapes that are not playback shapes.
-    const otherShapes = shapes.filter(
-        (shape) => shape.name !== "playback-cursor" && shape.name !== "playback-progress"
+    const x = Math.max(
+        xMin,
+        Math.min(currentTime, xMax)
     );
 
+
+    const shapes =
+        plot.layout.shapes || [];
+
+
+    /*
+     * Preserve:
+     *
+     * - mask region shapes
+     * - any future non-playback shapes
+     *
+     * Remove only the previous playback shapes.
+     */
+    const persistentShapes =
+        shapes.filter(
+            (shape) =>
+                shape.name !== "playback-cursor" &&
+                shape.name !== "playback-progress"
+        );
+
+
     const playbackShapes = [
+
         {
             name: "playback-progress",
+
             type: "rect",
+
             xref: "x",
             yref: "paper",
+
             x0: xMin,
             x1: x,
+
             y0: 0,
             y1: 1,
-            fillcolor: "rgba(120, 130, 145, 0.10)",
+
+            fillcolor:
+                "rgba(120, 130, 145, 0.10)",
+
             line: {
                 width: 0,
             },
+
             layer: "below",
         },
+
         {
             name: "playback-cursor",
+
             type: "line",
+
             xref: "x",
             yref: "paper",
+
             x0: x,
             x1: x,
+
             y0: 0,
             y1: 1,
+
             line: {
                 color: "#F5F7FA",
                 width: 2,
             },
+
             layer: "above",
         },
     ];
 
+
     Plotly.relayout(plot, {
-        shapes: [...otherShapes, ...playbackShapes],
+        shapes: [
+            ...persistentShapes,
+            ...playbackShapes,
+        ],
     });
 }
 
@@ -489,9 +707,1235 @@ function resetResults() {
     el("freqMin").value = "";
     el("freqMax").value = "";
 
+    resetMaskRegions();
+
     // Reset status message
     setStatus("");
 }
+
+
+
+
+/* =========================================================
+   INTERACTIVE MASKING
+   ========================================================= */
+
+let maskShapeEventAttached = false;
+
+
+function createMaskRegion(x0, x1, y0, y1) {
+    const timeMin = Math.min(Number(x0), Number(x1));
+    const timeMax = Math.max(Number(x0), Number(x1));
+
+    const freqMin = Math.min(Number(y0), Number(y1));
+    const freqMax = Math.max(Number(y0), Number(y1));
+
+    const nextId =
+        state.maskRegions.length > 0
+            ? Math.max(...state.maskRegions.map((r) => r.id)) + 1
+            : 1;
+
+    return clampMaskRegion({
+        id: nextId,
+        name: `Region ${nextId}`,
+
+        freqMin,
+        freqMax,
+        timeMin,
+        timeMax,
+
+        mode: "remove",
+        enabled: true,
+    });
+}
+
+
+function getSelectedMaskRegion() {
+    return state.maskRegions.find(
+        (region) => region.id === state.selectedMaskRegionId
+    ) || null;
+}
+
+
+function selectMaskRegion(regionId, refreshPlot = true) {
+    const region = state.maskRegions.find(
+        (item) => item.id === regionId
+    );
+
+    if (!region) {
+        state.selectedMaskRegionId = null;
+        updateMaskRegionEditor();
+        if (refreshPlot) {
+            renderMaskRegionShapes();
+        }
+        return;
+    }
+
+    state.selectedMaskRegionId = region.id;
+
+    updateMaskRegionEditor();
+    updateMaskRegionDropdown();
+
+    if (refreshPlot) {
+        renderMaskRegionShapes();
+    }
+}
+
+
+function clearMaskRegionSelection() {
+    state.selectedMaskRegionId = null;
+
+    updateMaskRegionEditor();
+    updateMaskRegionDropdown();
+    renderMaskRegionShapes();
+}
+
+
+function updateMaskRegionEditor() {
+    const region = getSelectedMaskRegion();
+
+    const selectedLabel = el("maskSelectedRegion");
+    const dropdownLabel = el("maskRegionDropdownLabel");
+
+    const freqMin = el("freqMin");
+    const freqMax = el("freqMax");
+    const timeMin = el("timeMin");
+    const timeMax = el("timeMax");
+
+    const enabled = el("maskRegionEnabled");
+    const editor = document.querySelector(".mask-editor-card");
+
+    if (!region) {
+        if (selectedLabel) {
+            selectedLabel.textContent = "None";
+        }
+
+        if (dropdownLabel) {
+            dropdownLabel.textContent = "No regions";
+        }
+
+        freqMin.value = "";
+        freqMax.value = "";
+        timeMin.value = "";
+        timeMax.value = "";
+
+        enabled.checked = false;
+
+        if (editor) {
+            editor.classList.add("region-empty");
+        }
+
+        document.querySelectorAll('input[name="maskMode"]').forEach((input) => {
+            input.checked = input.value === "remove";
+            input.disabled = true;
+        });
+
+        enabled.disabled = true;
+
+        return;
+    }
+
+    if (editor) {
+        editor.classList.remove("region-empty");
+    }
+
+    if (selectedLabel) {
+        selectedLabel.textContent = region.name;
+    }
+
+    if (dropdownLabel) {
+        dropdownLabel.textContent = region.name;
+    }
+
+    freqMin.value = Number(region.freqMin).toFixed(0);
+    freqMax.value = Number(region.freqMax).toFixed(0);
+    timeMin.value = Number(region.timeMin).toFixed(2);
+    timeMax.value = Number(region.timeMax).toFixed(2);
+
+    enabled.checked = region.enabled;
+    enabled.disabled = false;
+
+    document.querySelectorAll('input[name="maskMode"]').forEach((input) => {
+        input.disabled = false;
+        input.checked = input.value === region.mode;
+    });
+}
+
+
+function updateMaskRegionDropdown() {
+    const menu = el("maskRegionDropdownMenu");
+
+    if (!menu) return;
+
+    menu.innerHTML = "";
+
+    if (state.maskRegions.length === 0) {
+        menu.innerHTML = `
+            <div class="mask-region-empty">
+                No regions yet.
+            </div>
+        `;
+        return;
+    }
+
+    state.maskRegions.forEach((region) => {
+        const row = document.createElement("div");
+
+        row.className =
+            "mask-region-item" +
+            (region.id === state.selectedMaskRegionId ? " selected" : "");
+
+        row.dataset.regionId = region.id;
+
+        row.innerHTML = `
+            <span class="mask-region-item-label">
+                ${region.name}
+            </span>
+
+            <label class="mask-region-item-checkbox">
+                <input
+                    type="checkbox"
+                    ${region.enabled ? "checked" : ""}
+                    data-region-enable="${region.id}">
+                <span>Enabled</span>
+            </label>
+        `;
+
+        row.addEventListener("click", (event) => {
+
+            // Clicking the checkbox should only toggle enable/disable.
+            if (event.target.matches('input[type="checkbox"]')) {
+                return;
+            }
+
+            selectMaskRegion(region.id);
+            closeMaskRegionDropdown();
+        });
+
+        const checkbox = row.querySelector(
+            `[data-region-enable="${region.id}"]`
+        );
+
+        checkbox.addEventListener("change", (event) => {
+            region.enabled = event.target.checked;
+
+            updateMaskRegionEditor();
+            renderMaskRegionShapes();
+        });
+
+        menu.appendChild(row);
+    });
+}
+
+
+function openMaskRegionDropdown() {
+    const dropdown = el("maskRegionDropdown");
+    if (!dropdown) return;
+
+    dropdown.classList.add("open");
+}
+
+
+function closeMaskRegionDropdown() {
+    const dropdown = el("maskRegionDropdown");
+    if (!dropdown) return;
+
+    dropdown.classList.remove("open");
+}
+
+
+function toggleMaskRegionDropdown() {
+    const dropdown = el("maskRegionDropdown");
+
+    if (!dropdown) return;
+
+    dropdown.classList.toggle("open");
+}
+
+
+function setMaskInteractionMode(mode) {
+
+    if (
+        mode !== "edit" &&
+        mode !== "add"
+    ) {
+        return;
+    }
+
+
+    state.maskInteractionMode = mode;
+
+
+    const editBtn =
+        el("editRegionModeBtn");
+
+    const addBtn =
+        el("addRegionModeBtn");
+
+    const hint =
+        el("maskModeHint");
+
+    const plot =
+        el("maskSpectrogram");
+
+
+    editBtn.classList.toggle(
+        "active",
+        mode === "edit"
+    );
+
+    addBtn.classList.toggle(
+        "active",
+        mode === "add"
+    );
+
+
+    if (mode === "edit") {
+
+        hint.textContent =
+            "Click a region to select it. Drag or resize the selected region.";
+
+
+        if (
+            plot &&
+            plot.layout
+        ) {
+
+            Plotly.relayout(
+                plot,
+                {
+                    dragmode: "false",
+                }
+            );
+        }
+
+    } else {
+
+        hint.textContent =
+            "Drag on empty space to create a new region.";
+
+
+        if (
+            plot &&
+            plot.layout
+        ) {
+
+            Plotly.relayout(
+                plot,
+                {
+                    dragmode: "drawrect",
+                }
+            );
+        }
+    }
+
+
+    /*
+     * Make only our region shapes editable while in Edit mode.
+     */
+    updateMaskShapeInteractivity();
+}
+
+
+function updateMaskShapeInteractivity() {
+    const plot = el("maskSpectrogram");
+
+    if (!plot || !plot.layout) return;
+
+    const shapes = plot.layout.shapes || [];
+
+    const updates = {};
+
+    shapes.forEach((shape, index) => {
+
+        if (!shape.name || !shape.name.startsWith("mask-region-")) {
+            return;
+        }
+
+        updates[`shapes[${index}].editable`] =
+            state.maskInteractionMode === "edit";
+    });
+
+    if (Object.keys(updates).length > 0) {
+        Plotly.relayout(plot, updates);
+    }
+}
+
+
+function getMaskRegionShapes() {
+    return state.maskRegions.map((region) => {
+
+        const selected =
+            region.id === state.selectedMaskRegionId;
+
+        const modeColor =
+            region.mode === "remove"
+                ? "#F5A623"
+                : "#C792EA";
+
+        return {
+            type: "rect",
+
+            xref: "x",
+            yref: "y",
+
+            x0: region.timeMin,
+            x1: region.timeMax,
+
+            y0: region.freqMin,
+            y1: region.freqMax,
+
+            name: `mask-region-${region.id}`,
+
+            editable:
+                state.maskInteractionMode === "edit",
+
+            layer: "above",
+
+            opacity: selected ? 0.55 : 0.32,
+
+            fillcolor:
+                region.enabled
+                    ? `rgba(245, 166, 35, ${selected ? 0.16 : 0.08})`
+                    : "rgba(120, 130, 145, 0.05)",
+
+            line: {
+                color: selected
+                    ? modeColor
+                    : region.enabled
+                        ? modeColor
+                        : "#7b8494",
+
+                width: selected ? 3 : 1.5,
+
+                dash:
+                    region.enabled
+                        ? "solid"
+                        : "dash",
+            },
+        };
+    });
+}
+
+
+function renderMaskRegionShapes() {
+    const plot = el("maskSpectrogram");
+
+    if (!plot || !plot.layout) return;
+
+    const existingShapes = plot.layout.shapes || [];
+
+    const playbackShapes = existingShapes.filter(
+        (shape) =>
+            shape.name &&
+            shape.name !== "playback-cursor" &&
+            shape.name !== "playback-progress" &&
+            !shape.name.startsWith("mask-region-")
+    );
+
+    const regionShapes = getMaskRegionShapes();
+
+    const currentPlaybackShapes = existingShapes.filter(
+        (shape) =>
+            shape.name === "playback-cursor" ||
+            shape.name === "playback-progress"
+    );
+
+    Plotly.relayout(plot, {
+        shapes: [
+            ...playbackShapes,
+            ...regionShapes,
+            ...currentPlaybackShapes,
+        ],
+    });
+
+    updateMaskRegionDropdown();
+    updateMaskRegionEditor();
+}
+
+
+function syncSelectedMaskRegionFromShape(shapeIndex, shape) {
+    if (!shape) return;
+
+    if (
+        !shape.name ||
+        !shape.name.startsWith("mask-region-")
+    ) {
+        return;
+    }
+
+    const id = Number(
+        shape.name.replace("mask-region-", "")
+    );
+
+    const region = state.maskRegions.find(
+        (item) => item.id === id
+    );
+
+    if (!region) return;
+
+    const x0 = Number(shape.x0);
+    const x1 = Number(shape.x1);
+    const y0 = Number(shape.y0);
+    const y1 = Number(shape.y1);
+
+    if (
+        !Number.isFinite(x0) ||
+        !Number.isFinite(x1) ||
+        !Number.isFinite(y0) ||
+        !Number.isFinite(y1)
+    ) {
+        return;
+    }
+
+    region.timeMin = Math.max(0, Math.min(x0, x1));
+    region.timeMax = Math.min(
+        state.duration,
+        Math.max(x0, x1)
+    );
+
+    region.freqMin = Math.max(
+        0,
+        Math.min(y0, y1)
+    );
+
+    region.freqMax = Math.min(
+        state.sr / 2,
+        Math.max(y0, y1)
+    );
+
+    state.selectedMaskRegionId = region.id;
+
+    updateMaskRegionEditor();
+    updateMaskRegionDropdown();
+    updateMaskRegionShapesOnly();
+}
+
+
+function updateMaskRegionShapesOnly() {
+    const plot = el("maskSpectrogram");
+
+    if (!plot || !plot.layout) return;
+
+    const shapes = plot.layout.shapes || [];
+
+    const updates = {};
+
+    state.maskRegions.forEach((region) => {
+
+        const shapeIndex = shapes.findIndex(
+            (shape) =>
+                shape.name === `mask-region-${region.id}`
+        );
+
+        if (shapeIndex === -1) return;
+
+        updates[`shapes[${shapeIndex}].x0`] = region.timeMin;
+        updates[`shapes[${shapeIndex}].x1`] = region.timeMax;
+        updates[`shapes[${shapeIndex}].y0`] = region.freqMin;
+        updates[`shapes[${shapeIndex}].y1`] = region.freqMax;
+    });
+
+    if (Object.keys(updates).length > 0) {
+        Plotly.relayout(plot, updates);
+    }
+}
+
+let maskNeedsRestyle = false;
+
+function findTopMaskRegionAt(event) {
+    const plot = el("maskSpectrogram");
+    const fl = plot && plot._fullLayout;
+
+    if (!fl || !fl.xaxis || !fl.yaxis) return null;
+
+    const box = plot.getBoundingClientRect();
+
+    const px = event.clientX - box.left - fl.xaxis._offset;
+    const py = event.clientY - box.top - fl.yaxis._offset;
+
+    // Ignore clicks outside the plotting area.
+    if (px < 0 || px > fl.xaxis._length || py < 0 || py > fl.yaxis._length) {
+        return null;
+    }
+
+    const x = fl.xaxis.p2d(px);
+    const y = fl.yaxis.p2d(py);
+
+    // Last region = drawn on top, so search from the end.
+    for (let i = state.maskRegions.length - 1; i >= 0; i--) {
+        const r = state.maskRegions[i];
+
+        if (x >= r.timeMin && x <= r.timeMax && y >= r.freqMin && y <= r.freqMax) {
+            return r;
+        }
+    }
+
+    return null;
+}
+
+
+function attachMaskShapeClickHandler() {
+    const plot = el("maskSpectrogram");
+
+    if (!plot || maskShapeEventAttached) return;
+
+    maskShapeEventAttached = true;
+
+    plot.addEventListener("mousedown", (event) => {
+        if (state.maskInteractionMode !== "edit" || event.button !== 0) return;
+        if (event.target.closest && event.target.closest(".modebar")) return;
+
+        const hit = findTopMaskRegionAt(event);
+
+        if (!hit || hit.id === state.selectedMaskRegionId) return;
+
+        state.selectedMaskRegionId = hit.id;
+
+        updateMaskRegionEditor();
+        updateMaskRegionDropdown();
+
+        maskNeedsRestyle = true;
+    });
+
+    // Repaint the highlight only after the mouse is released,
+    // so we never interrupt Plotly's drag/resize.
+    plot.addEventListener("mouseup", () => {
+        if (!maskNeedsRestyle) return;
+
+        maskNeedsRestyle = false;
+        setTimeout(renderMaskRegionShapes, 50);
+    });
+}
+
+
+function clampMaskRegion(region) {
+    const maxTime = state.duration > 0 ? state.duration : Infinity;
+    const maxFreq = state.sr / 2;
+
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, Number(v) || 0));
+
+    let tMin = clamp(region.timeMin, 0, maxTime);
+    let tMax = clamp(region.timeMax, 0, maxTime);
+    let fMin = clamp(region.freqMin, 0, maxFreq);
+    let fMax = clamp(region.freqMax, 0, maxFreq);
+
+    if (tMax < tMin) [tMin, tMax] = [tMax, tMin];
+    if (fMax < fMin) [fMin, fMax] = [fMax, fMin];
+
+    region.timeMin = tMin;
+    region.timeMax = tMax;
+    region.freqMin = fMin;
+    region.freqMax = fMax;
+
+    return region;
+}
+
+
+
+function handleMaskRelayout(eventData) {
+
+    if (!eventData) {
+        return;
+    }
+
+    const plot = el("maskSpectrogram");
+
+    if (!plot) {
+        return;
+    }
+
+
+    /*
+     * =========================================================
+     * 1. Detect newly drawn rectangle
+     * =========================================================
+     *
+     * Plotly can report a newly created shape directly through
+     * eventData:
+     *
+     *   shapes[0] = {...}
+     *
+     * or:
+     *
+     *   shapes[0].x0
+     *   shapes[0].x1
+     *   shapes[0].y0
+     *   shapes[0].y1
+     *
+     * We inspect eventData directly instead of relying only on
+     * plot.layout.shapes.
+     */
+
+    const hasShapeKey = Object.keys(eventData).some((k) => k.startsWith("shapes"));
+
+    if (state.maskInteractionMode === "add" && hasShapeKey) {
+
+        let newShape = null;
+
+        const layoutShapes = plot.layout?.shapes || [];
+
+        // Plotly's freshly drawn rectangle has no name.
+        // Our own regions are named "mask-region-N", and playback shapes have names too.
+        newShape = layoutShapes.find(
+            (s) => s && s.type === "rect" && !s.name
+        ) || null;
+
+        console.log("[mask] relayout:", eventData, "newShape:", newShape);
+
+
+
+        /*
+         * If a new rectangle was actually created,
+         * register it as one of our application regions.
+         */
+        if (newShape) {
+
+            const x0 = Number(newShape.x0);
+            const x1 = Number(newShape.x1);
+            const y0 = Number(newShape.y0);
+            const y1 = Number(newShape.y1);
+
+
+            if (
+                Number.isFinite(x0) &&
+                Number.isFinite(x1) &&
+                Number.isFinite(y0) &&
+                Number.isFinite(y1)
+            ) {
+
+                /*
+                 * Ignore tiny accidental drags.
+                 */
+                if (
+                    Math.abs(x1 - x0) >= 0.01 &&
+                    Math.abs(y1 - y0) >= 1
+                ) {
+
+                    const region =
+                        createMaskRegion(
+                            x0,
+                            x1,
+                            y0,
+                            y1
+                        );
+
+
+                    /*
+                     * Add it to application state.
+                     */
+                    state.maskRegions.push(
+                        region
+                    );
+
+                    /*
+                     * Automatically select it.
+                     */
+                    state.selectedMaskRegionId =
+                        region.id;
+
+
+                    /*
+                     * Rebuild ALL region shapes from our
+                     * application state.
+                     *
+                     * This removes Plotly's temporary unnamed
+                     * drawing shape and replaces it with our
+                     * properly named/editable region.
+                     */
+                    const regionShapes =
+                        getMaskRegionShapes();
+
+
+                    const currentShapes =
+                        plot.layout?.shapes || [];
+
+
+                    const persistentShapes =
+                        currentShapes.filter(
+                            (shape) =>
+                                shape.name &&
+                                shape.name !== "playback-cursor" &&
+                                shape.name !== "playback-progress" &&
+                                !shape.name.startsWith("mask-region-")
+                        );
+
+                    const playbackShapes =
+                        currentShapes.filter(
+                            (shape) =>
+                                shape.name ===
+                                "playback-cursor" ||
+                                shape.name ===
+                                "playback-progress"
+                        );
+
+                    state.maskInteractionMode = "edit";
+
+                    Plotly.relayout(plot, {
+                        shapes: [
+                            ...persistentShapes,
+                            ...regionShapes,
+                            ...playbackShapes,
+                        ],
+
+                        /*
+                         * Once the rectangle is registered,
+                         * return to normal editing.
+                         */
+                        dragmode: "false",
+                    });
+
+
+                    /*
+                     * Update our UI state.
+                     */
+                    state.maskInteractionMode =
+                        "edit";
+
+
+                    el(
+                        "editRegionModeBtn"
+                    ).classList.add("active");
+
+                    el(
+                        "addRegionModeBtn"
+                    ).classList.remove("active");
+
+
+                    el(
+                        "maskModeHint"
+                    ).textContent =
+                        "Click a region to select it. Drag or resize the selected region.";
+
+
+                    updateMaskRegionDropdown();
+
+                    updateMaskRegionEditor();
+
+                    return;
+                }
+            }
+        }
+    }
+
+
+    /*
+     * =========================================================
+     * 2. Detect movement / resizing of existing regions
+     * =========================================================
+     */
+
+    if (
+        state.maskInteractionMode === "edit"
+    ) {
+
+        const shapes =
+            plot.layout?.shapes || [];
+
+
+        const changedRegionIds =
+            new Set();
+
+
+        Object.keys(eventData).forEach(
+            (key) => {
+
+                const match = key.match(
+                    /^shapes\[(\d+)\]/
+                );
+
+                if (!match) {
+                    return;
+                }
+
+                const index =
+                    Number(match[1]);
+
+                const shape =
+                    shapes[index];
+
+                if (
+                    !shape ||
+                    !shape.name ||
+                    !shape.name.startsWith(
+                        "mask-region-"
+                    )
+                ) {
+                    return;
+                }
+
+                const id =
+                    Number(
+                        shape.name.replace(
+                            "mask-region-",
+                            ""
+                        )
+                    );
+
+                if (
+                    Number.isInteger(id)
+                ) {
+                    changedRegionIds.add(id);
+                }
+            }
+        );
+
+
+        /*
+         * Synchronize every changed region.
+         */
+        changedRegionIds.forEach(
+            (id) => {
+
+                const region =
+                    state.maskRegions.find(
+                        (item) =>
+                            item.id === id
+                    );
+
+                if (!region) {
+                    return;
+                }
+
+
+                const shape =
+                    shapes.find(
+                        (item) =>
+                            item.name ===
+                            `mask-region-${id}`
+                    );
+
+                if (!shape) {
+                    return;
+                }
+
+
+                const x0 =
+                    Number(shape.x0);
+
+                const x1 =
+                    Number(shape.x1);
+
+                const y0 =
+                    Number(shape.y0);
+
+                const y1 =
+                    Number(shape.y1);
+
+
+                if (
+                    !Number.isFinite(x0) ||
+                    !Number.isFinite(x1) ||
+                    !Number.isFinite(y0) ||
+                    !Number.isFinite(y1)
+                ) {
+                    return;
+                }
+
+
+                region.timeMin =
+                    Math.max(
+                        0,
+                        Math.min(x0, x1)
+                    );
+
+                region.timeMax =
+                    Math.min(
+                        state.duration,
+                        Math.max(x0, x1)
+                    );
+
+
+                region.freqMin =
+                    Math.max(
+                        0,
+                        Math.min(y0, y1)
+                    );
+
+                region.freqMax =
+                    Math.min(
+                        state.sr / 2,
+                        Math.max(y0, y1)
+                    );
+
+
+                /*
+                 * The edited region becomes the selected region.
+                 */
+                state.selectedMaskRegionId =
+                    region.id;
+            }
+        );
+
+
+        if (
+            changedRegionIds.size > 0
+        ) {
+
+            updateMaskRegionEditor();
+
+            updateMaskRegionDropdown();
+        }
+    }
+}
+
+function wireMaskRegionControls() {
+
+    el("maskRegionDropdownBtn").addEventListener(
+        "click",
+        (event) => {
+            event.stopPropagation();
+            toggleMaskRegionDropdown();
+        }
+    );
+
+
+    document.addEventListener("click", (event) => {
+
+        const dropdown = el("maskRegionDropdown");
+
+        if (!dropdown) return;
+
+        if (!dropdown.contains(event.target)) {
+            closeMaskRegionDropdown();
+        }
+    });
+
+
+    el("editRegionModeBtn").addEventListener(
+        "click",
+        () => {
+            setMaskInteractionMode("edit");
+        }
+    );
+
+
+    el("addRegionModeBtn").addEventListener(
+        "click",
+        () => {
+            setMaskInteractionMode("add");
+        }
+    );
+
+
+    const coordinateInputs = [
+        ["freqMin", "freqMin"],
+        ["freqMax", "freqMax"],
+        ["timeMin", "timeMin"],
+        ["timeMax", "timeMax"],
+    ];
+
+
+    coordinateInputs.forEach(([inputId, property]) => {
+
+        el(inputId).addEventListener(
+            "change",
+            () => {
+
+                const region = getSelectedMaskRegion();
+
+                if (!region) return;
+
+                const value = Number(
+                    el(inputId).value
+                );
+
+                if (!Number.isFinite(value)) {
+                    updateMaskRegionEditor();
+                    return;
+                }
+
+                region[property] = value;
+
+                /*
+                 * Normalize the range.
+                 */
+                if (
+                    property === "freqMin" ||
+                    property === "freqMax"
+                ) {
+                    region.freqMin = Math.max(
+                        0,
+                        Math.min(region.freqMin, state.sr / 2)
+                    );
+
+                    region.freqMax = Math.max(
+                        0,
+                        Math.min(region.freqMax, state.sr / 2)
+                    );
+                }
+
+                if (
+                    region.freqMax < region.freqMin
+                ) {
+                    [
+                        region.freqMin,
+                        region.freqMax
+                    ] = [
+                            region.freqMax,
+                            region.freqMin
+                        ];
+                }
+
+                if (
+                    region.timeMax < region.timeMin
+                ) {
+                    [
+                        region.timeMin,
+                        region.timeMax
+                    ] = [
+                            region.timeMax,
+                            region.timeMin
+                        ];
+                }
+
+                region.timeMin = Math.max(
+                    0,
+                    Math.min(region.timeMin, state.duration)
+                );
+
+                region.timeMax = Math.max(
+                    0,
+                    Math.min(region.timeMax, state.duration)
+                );
+
+                updateMaskRegionEditor();
+                updateMaskRegionShapesOnly();
+            }
+        );
+    });
+
+
+    el("maskRegionEnabled").addEventListener(
+        "change",
+        (event) => {
+
+            const region = getSelectedMaskRegion();
+
+            if (!region) return;
+
+            region.enabled = event.target.checked;
+
+            updateMaskRegionDropdown();
+            renderMaskRegionShapes();
+        }
+    );
+
+
+    document
+        .querySelectorAll('input[name="maskMode"]')
+        .forEach((input) => {
+
+            input.addEventListener(
+                "change",
+                (event) => {
+
+                    const region = getSelectedMaskRegion();
+
+                    if (!region) return;
+
+                    region.mode = event.target.value;
+
+                    renderMaskRegionShapes();
+                    updateMaskRegionEditor();
+                }
+            );
+        });
+
+
+    el("deleteMaskRegionBtn").addEventListener(
+        "click",
+        deleteSelectedMaskRegion
+    );
+}
+
+
+function deleteSelectedMaskRegion() {
+
+    const region = getSelectedMaskRegion();
+
+    if (!region) return;
+
+    const deletedIndex =
+        state.maskRegions.findIndex(
+            (item) => item.id === region.id
+        );
+
+    if (deletedIndex === -1) return;
+
+    state.maskRegions.splice(
+        deletedIndex,
+        1
+    );
+
+
+    /*
+     * Select the nearest remaining region.
+     */
+    if (state.maskRegions.length > 0) {
+
+        const nextIndex = Math.min(
+            deletedIndex,
+            state.maskRegions.length - 1
+        );
+
+        state.selectedMaskRegionId =
+            state.maskRegions[nextIndex].id;
+
+    } else {
+
+        state.selectedMaskRegionId = null;
+    }
+
+
+    renderMaskRegionShapes();
+}
+
+
+function resetMaskRegions() {
+
+    state.maskRegions = [];
+    state.selectedMaskRegionId = null;
+    state.maskInteractionMode = "edit";
+
+    closeMaskRegionDropdown();
+
+    const editBtn =
+        el("editRegionModeBtn");
+
+    const addBtn =
+        el("addRegionModeBtn");
+
+    const hint =
+        el("maskModeHint");
+
+    if (editBtn) {
+        editBtn.classList.add("active");
+    }
+
+    if (addBtn) {
+        addBtn.classList.remove("active");
+    }
+
+    if (hint) {
+        hint.textContent =
+            "Click a region to select it. Drag or resize the selected region.";
+    }
+
+    if (el("maskRegionDropdownMenu")) {
+        updateMaskRegionDropdown();
+    }
+
+    if (el("freqMin")) {
+        updateMaskRegionEditor();
+    }
+}
+
+
+
+
+
+
 
 /* ---------- main analyze flow ---------- */
 
@@ -519,15 +1963,15 @@ async function runAnalyze() {
         renderSpectrogram("overviewSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false });
         renderSpectrogram("magSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false });
         renderPhase("phasePlot", data.freqs, data.times, data.phase);
-        renderSpectrogram("maskSpectrogram", data.freqs, data.times, data.magnitude_db, {
-            selectable: true,
-            onSelect: (xr, yr) => {
-                el("timeMin").value = Math.max(0, xr[0]).toFixed(2);
-                el("timeMax").value = Math.min(state.duration, xr[1]).toFixed(2);
-                el("freqMin").value = Math.max(0, yr[0]).toFixed(0);
-                el("freqMax").value = Math.min(data.sr / 2, yr[1]).toFixed(0);
-            },
-        });
+        renderSpectrogram(
+            "maskSpectrogram",
+            data.freqs,
+            data.times,
+            data.magnitude_db,
+            {
+                selectable: false,
+            }
+        );
         renderSpectrogram("retainSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false });
 
         setAudioFromSource();
@@ -614,54 +2058,165 @@ async function generateComponent(mode, playerId) {
 /* ---------- masking ---------- */
 
 async function applyMask() {
+
     try {
+
+        if (state.maskRegions.length === 0) {
+            setStatus(
+                "Create at least one masking region first.",
+                "error"
+            );
+            return;
+        }
+
+
+        const enabledRegions =
+            state.maskRegions.filter(
+                (region) => region.enabled
+            );
+
+
+        if (enabledRegions.length === 0) {
+            setStatus(
+                "Enable at least one masking region.",
+                "error"
+            );
+            return;
+        }
+
+
         setBusy(true);
         setStatus("Applying mask...");
-        const mode = document.querySelector('input[name="maskMode"]:checked').value;
+
+
         const req = {
-            source: state.source, sr: state.sr, n_fft: state.n_fft, hop_length: state.hop_length,
-            freq_min: parseFloat(el("freqMin").value), freq_max: parseFloat(el("freqMax").value),
-            time_min: parseFloat(el("timeMin").value), time_max: parseFloat(el("timeMax").value),
-            mode,
+
+            source: state.source,
+
+            sr: state.sr,
+
+            n_fft: state.n_fft,
+
+            hop_length: state.hop_length,
+
+            regions: enabledRegions
+                .map((region) => clampMaskRegion({ ...region }))
+                .filter((r) => r.timeMax > r.timeMin && r.freqMax > r.freqMin)
+                .map((region) => ({
+                    freq_min: region.freqMin,
+                    freq_max: region.freqMax,
+
+                    time_min: region.timeMin,
+                    time_max: region.timeMax,
+
+                    mode: region.mode,
+
+                    enabled: region.enabled,
+                })),
         };
-        
-        const data = await apiPost_json("/audio/mask", req);
+
+        if (req.regions.length === 0) {
+            setStatus("Enabled regions have no valid area inside the audio.", "error");
+            setBusy(false);
+            return;
+        }
+
+
+        const data =
+            await apiPost_json(
+                "/audio/mask",
+                req
+            );
+
+
         state.lastMask = data;
+
 
         renderSpectrogram(
             "maskResultSpectrogram",
+
             state.lastAnalyze.freqs,
+
             state.lastAnalyze.times,
+
             data.magnitude_db,
-            { selectable: false }
+
+            {
+                selectable: false,
+            }
         );
 
-        const maskedPlayer = el("maskedPlayer");
-        maskedPlayer.src = "data:audio/wav;base64," + data.audio_base64;
+
+        const maskedPlayer =
+            el("maskedPlayer");
+
+
+        maskedPlayer.src =
+            "data:audio/wav;base64," +
+            data.audio_base64;
+
         maskedPlayer.load();
 
+
         el("maskReadouts").innerHTML = `
-            <div class="readout">
-                <div class="readout-label">SNR</div>
-                <div class="readout-value">${fmt(data.snr_db, 2, " dB")}</div>
-            </div>
 
             <div class="readout">
-                <div class="readout-label">MSE</div>
-                <div class="readout-value">${data.mse.toFixed(6)}</div>
+
+                <div class="readout-label">
+                    SNR
+                </div>
+
+                <div class="readout-value">
+                    ${fmt(data.snr_db, 2, " dB")}
+                </div>
+
             </div>
 
+
             <div class="readout">
-                <div class="readout-label">Spectral Conv.</div>
-                <div class="readout-value">${data.spectral_convergence.toFixed(4)}</div>
+
+                <div class="readout-label">
+                    MSE
+                </div>
+
+                <div class="readout-value">
+                    ${data.mse.toFixed(6)}
+                </div>
+
             </div>
+
+
+            <div class="readout">
+
+                <div class="readout-label">
+                    Spectral Conv.
+                </div>
+
+                <div class="readout-value">
+                    ${data.spectral_convergence.toFixed(4)}
+                </div>
+
+            </div>
+
         `;
 
+
         updateMetricsTab(data);
-        setStatus("Mask applied", "success");
+
+        setStatus(
+            "Mask applied",
+            "success"
+        );
+
     } catch (err) {
-        setStatus(err.message, "error");
+
+        setStatus(
+            err.message,
+            "error"
+        );
+
     } finally {
+
         setBusy(false);
     }
 }
@@ -867,6 +2422,7 @@ window.addEventListener("DOMContentLoaded", () => {
     wireFractionSlider();
     wireFreqToggle();
     wirePlaybackTracking();
+    wireMaskRegionControls();
     refreshLibrary();
 
     el("analyzeBtn").addEventListener("click", runAnalyze);

@@ -16,7 +16,11 @@ from audio_core.stft_engine import (
     frequency_axis,
     time_axis,
 )
-from audio_core.masking import build_time_freq_mask, apply_mask
+from audio_core.masking import (
+    build_time_freq_mask,
+    build_multi_region_mask,
+    apply_mask,
+)
 from audio_core.reconstruction import (
     retain_low_frequencies,
     retain_top_magnitude,
@@ -91,12 +95,26 @@ class ComponentRequest(AnalyzeRequest):
     mode: str  # "magnitude_only" | "phase_only"
 
 
-class MaskRequest(AnalyzeRequest):
+class MaskRegion(BaseModel):
     freq_min: float
     freq_max: float
     time_min: float
     time_max: float
     mode: str  # "remove" | "isolate"
+    enabled: bool = True
+
+
+class MaskRequest(AnalyzeRequest):
+    # New multi-region masking API
+    regions: list[MaskRegion] | None = None
+
+    # Legacy single-region fields.
+    # These remain optional so the existing frontend continues to work.
+    freq_min: float | None = None
+    freq_max: float | None = None
+    time_min: float | None = None
+    time_max: float | None = None
+    mode: str | None = None
 
 
 class RetainRequest(AnalyzeRequest):
@@ -187,29 +205,205 @@ def reconstruct_component(req: ComponentRequest):
 def mask_audio(req: MaskRequest):
     path = resolve_source(req.source)
     y, sr = load_audio(str(path), target_sr=req.sr, mono=True)
-    D = compute_stft(y, n_fft=req.n_fft, hop_length=req.hop_length, win_length=req.n_fft)
 
-    keep_mask = build_time_freq_mask(
-        D.shape, sr, req.n_fft, req.hop_length,
-        freq_range_hz=(req.freq_min, req.freq_max),
-        time_range_sec=(req.time_min, req.time_max),
-        mode=req.mode,
+    D = compute_stft(
+        y,
+        n_fft=req.n_fft,
+        hop_length=req.hop_length,
+        win_length=req.n_fft,
     )
+
+    # ---------------------------------------------------------
+    # New multi-region masking
+    # ---------------------------------------------------------
+    if req.regions is not None:
+
+        if len(req.regions) == 0:
+            raise HTTPException(
+                400,
+                "At least one masking region is required."
+            )
+
+        regions = []
+
+        for region in req.regions:
+            if region.mode not in {"remove", "isolate"}:
+                raise HTTPException(
+                    400,
+                    "Region mode must be 'remove' or 'isolate'."
+                )
+
+            if region.freq_min < 0:
+                raise HTTPException(
+                    400,
+                    "Frequency minimum cannot be negative."
+                )
+
+            if region.freq_max <= region.freq_min:
+                raise HTTPException(
+                    400,
+                    "Frequency maximum must be greater than frequency minimum."
+                )
+
+            if region.time_min < 0:
+                raise HTTPException(
+                    400,
+                    "Time minimum cannot be negative."
+                )
+
+            if region.time_max <= region.time_min:
+                raise HTTPException(
+                    400,
+                    "Time maximum must be greater than time minimum."
+                )
+
+            if region.freq_max > sr / 2:
+                raise HTTPException(
+                    400,
+                    f"Frequency maximum cannot exceed Nyquist frequency "
+                    f"({sr / 2:.0f} Hz)."
+                )
+
+            duration = len(y) / sr
+
+            if region.time_max > duration:
+                raise HTTPException(
+                    400,
+                    f"Time maximum cannot exceed audio duration "
+                    f"({duration:.3f} s)."
+                )
+
+            regions.append(region.model_dump())
+
+        keep_mask = build_multi_region_mask(
+            shape=D.shape,
+            sr=sr,
+            n_fft=req.n_fft,
+            hop_length=req.hop_length,
+            regions=regions,
+        )
+
+    # ---------------------------------------------------------
+    # Legacy single-region masking
+    #
+    # This keeps the existing frontend/API working.
+    # ---------------------------------------------------------
+    else:
+
+        required_legacy_fields = [
+            req.freq_min,
+            req.freq_max,
+            req.time_min,
+            req.time_max,
+            req.mode,
+        ]
+
+        if any(value is None for value in required_legacy_fields):
+            raise HTTPException(
+                400,
+                "Either 'regions' or all legacy masking fields "
+                "must be provided."
+            )
+
+        if req.mode not in {"remove", "isolate"}:
+            raise HTTPException(
+                400,
+                "mode must be 'remove' or 'isolate'"
+            )
+
+        if req.freq_min < 0:
+            raise HTTPException(
+                400,
+                "Frequency minimum cannot be negative."
+            )
+
+        if req.freq_max <= req.freq_min:
+            raise HTTPException(
+                400,
+                "Frequency maximum must be greater than frequency minimum."
+            )
+
+        if req.freq_max > sr / 2:
+            raise HTTPException(
+                400,
+                f"Frequency maximum cannot exceed Nyquist frequency "
+                f"({sr / 2:.0f} Hz)."
+            )
+
+        if req.time_min < 0:
+            raise HTTPException(
+                400,
+                "Time minimum cannot be negative."
+            )
+
+        if req.time_max <= req.time_min:
+            raise HTTPException(
+                400,
+                "Time maximum must be greater than time minimum."
+            )
+
+        duration = len(y) / sr
+
+        if req.time_max > duration:
+            raise HTTPException(
+                400,
+                f"Time maximum cannot exceed audio duration "
+                f"({duration:.3f} s)."
+            )
+
+        keep_mask = build_time_freq_mask(
+            D.shape,
+            sr,
+            req.n_fft,
+            req.hop_length,
+            freq_range_hz=(req.freq_min, req.freq_max),
+            time_range_sec=(req.time_min, req.time_max),
+            mode=req.mode,
+        )
+
+    # ---------------------------------------------------------
+    # Apply final mask
+    # ---------------------------------------------------------
+
     D_masked = apply_mask(D, keep_mask)
-    y_masked = compute_istft(D_masked, req.hop_length, req.n_fft, length=len(y))
+
+    y_masked = compute_istft(
+        D_masked,
+        req.hop_length,
+        req.n_fft,
+        length=len(y),
+    )
 
     magnitude_full, _ = magnitude_phase(D)
-    magnitude_db_masked = magnitude_to_db(np.abs(D_masked), ref=np.max(magnitude_full) + 1e-12)
 
-    audio_b64 = base64.b64encode(waveform_to_wav_bytes(y_masked, sr)).decode("ascii")
+    magnitude_db_masked = magnitude_to_db(
+        np.abs(D_masked),
+        ref=np.max(magnitude_full) + 1e-12,
+    )
+
+    audio_b64 = base64.b64encode(
+        waveform_to_wav_bytes(y_masked, sr)
+    ).decode("ascii")
+
     return {
         "audio_base64": audio_b64,
-        "magnitude_db": np.round(magnitude_db_masked, 1).tolist(),
-        "snr_db": sanitize_metric(snr_db(y, y_masked)),
-        "mse": sanitize_metric(mse(y, y_masked)),
-        "spectral_convergence": sanitize_metric(spectral_convergence(magnitude_full, np.abs(D_masked))),
+        "magnitude_db": np.round(
+            magnitude_db_masked,
+            1,
+        ).tolist(),
+        "snr_db": sanitize_metric(
+            snr_db(y, y_masked)
+        ),
+        "mse": sanitize_metric(
+            mse(y, y_masked)
+        ),
+        "spectral_convergence": sanitize_metric(
+            spectral_convergence(
+                magnitude_full,
+                np.abs(D_masked),
+            )
+        ),
     }
-
 
 @router.post("/retain")
 def retain_audio(req: RetainRequest):

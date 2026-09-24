@@ -255,55 +255,253 @@
                 </div>
 
                 <div id="tabMasking" class="lab-panel">
-                    <div class="plot-card">
-                        <div class="plot-card-head">
-                            <div class="plot-card-title">Drag a box on the spectrogram to select a region</div>
+
+                    <!-- MASKING WORKSPACE -->
+                    <div class="plot-card mask-workspace-card">
+
+                        <div class="mask-workspace-head">
+                            <div>
+                                <div class="plot-card-title">Time-Frequency Masking</div>
+                                <div class="mask-workspace-subtitle">
+                                    Create and manipulate multiple time-frequency regions.
+                                </div>
+                            </div>
+
+                            <div class="mask-selected-readout">
+                                Selected:
+                                <span id="maskSelectedRegion">None</span>
+                            </div>
                         </div>
+
+                        <!-- Interaction mode -->
+                        <div class="mask-mode-bar">
+                            <div class="mask-mode-toggle">
+                                <button id="editRegionModeBtn" class="mask-mode-btn active" type="button">
+                                    Edit Region
+                                </button>
+
+                                <button id="addRegionModeBtn" class="mask-mode-btn" type="button">
+                                    Add Region
+                                </button>
+                            </div>
+
+                            <div id="maskModeHint" class="mask-mode-hint">
+                                Click a region to select it. Drag or resize the selected region.
+                            </div>
+                        </div>
+
                         <div id="maskSpectrogram"></div>
+
                     </div>
 
-                    <div class="mask-controls">
-                        <div class="field"><label class="field-label">Freq min (Hz)</label><input type="number"
-                                id="freqMin" value="0"></div>
-                        <div class="field"><label class="field-label">Freq max (Hz)</label><input type="number"
-                                id="freqMax" value="11025"></div>
-                        <div class="field"><label class="field-label">Time min (s)</label><input type="number"
-                                id="timeMin" value="0" step="0.1"></div>
-                        <div class="field"><label class="field-label">Time max (s)</label><input type="number"
-                                id="timeMax" value="3" step="0.1"></div>
-                    </div>
 
-                    <div class="action-row">
-                        <div class="radio-group" style="flex-direction:row; gap:16px;">
-                            <label class="radio-option"><input type="radio" name="maskMode" value="remove" checked>
-                                Remove region</label>
-                            <label class="radio-option"><input type="radio" name="maskMode" value="isolate"> Isolate
-                                region</label>
+                    <!-- REGION SELECTOR -->
+                    <div class="mask-region-panel">
+
+                        <div class="mask-region-panel-head">
+                            <div class="field-label">Regions</div>
                         </div>
-                        <button id="applyMaskBtn" class="btn btn-primary btn-sm">Apply Mask</button>
-                        <button id="saveMaskBtn" class="btn btn-ghost btn-sm">Save to gallery</button>
+
+                        <div id="maskRegionDropdown" class="mask-region-dropdown">
+
+                            <button id="maskRegionDropdownBtn" class="mask-region-dropdown-btn" type="button">
+
+                                <span id="maskRegionDropdownLabel">
+                                    No regions
+                                </span>
+
+                                <span class="mask-dropdown-chevron">⌄</span>
+                            </button>
+
+                            <div id="maskRegionDropdownMenu" class="mask-region-dropdown-menu">
+
+                                <div class="mask-region-empty">
+                                    No regions yet.
+                                </div>
+
+                            </div>
+                        </div>
+
                     </div>
 
+
+                    <!-- SELECTED REGION CONTROLS -->
+                    <div class="mask-editor-card">
+
+                        <div class="mask-editor-grid">
+
+                            <div class="field">
+                                <label class="field-label">
+                                    Freq min (Hz)
+                                </label>
+
+                                <input type="number" id="freqMin" value="" min="0" step="1">
+                            </div>
+
+                            <div class="field">
+                                <label class="field-label">
+                                    Freq max (Hz)
+                                </label>
+
+                                <input type="number" id="freqMax" value="" min="0" step="1">
+                            </div>
+
+                            <div class="field">
+                                <label class="field-label">
+                                    Time min (s)
+                                </label>
+
+                                <input type="number" id="timeMin" value="" min="0" step="0.01">
+                            </div>
+
+                            <div class="field">
+                                <label class="field-label">
+                                    Time max (s)
+                                </label>
+
+                                <input type="number" id="timeMax" value="" min="0" step="0.01">
+                            </div>
+
+                        </div>
+
+
+                        <div class="mask-editor-lower">
+
+                            <!-- Operation -->
+                            <div class="mask-operation-block">
+
+                                <div class="field-label">
+                                    Operation
+                                </div>
+
+                                <div class="mask-operation-toggle">
+
+                                    <label class="mask-operation-option">
+                                        <input type="radio" name="maskMode" value="remove" checked>
+
+                                        <span>Remove</span>
+                                    </label>
+
+                                    <label class="mask-operation-option">
+                                        <input type="radio" name="maskMode" value="isolate">
+
+                                        <span>Isolate</span>
+                                    </label>
+
+                                </div>
+
+                            </div>
+
+
+                            <!-- Region management -->
+                            <div class="mask-region-management">
+
+                                <label class="mask-enabled-option">
+                                    <input type="checkbox" id="maskRegionEnabled" checked>
+
+                                    <span>Enabled</span>
+                                </label>
+
+                                <button id="deleteMaskRegionBtn" class="btn btn-danger btn-sm" type="button">
+
+                                    Delete Region
+
+                                </button>
+
+                            </div>
+
+                        </div>
+
+
+                        <div class="mask-overlap-note">
+
+                            <span class="mask-overlap-title">
+                                Overlapping regions:
+                            </span>
+
+                            Remove takes priority over Isolate.
+
+                            <span class="mask-overlap-rule">
+                                Isolate + Isolate → Isolate
+                            </span>
+
+                            <span class="mask-overlap-rule">
+                                Remove + Remove → Remove
+                            </span>
+
+                            <span class="mask-overlap-rule">
+                                Remove + Isolate → Remove
+                            </span>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- MASK ACTIONS -->
+                    <div class="mask-actions">
+
+                        <button id="applyMaskBtn" class="btn btn-primary btn-sm" type="button">
+
+                            Apply Mask
+
+                        </button>
+
+                        <button id="saveMaskBtn" class="btn btn-ghost btn-sm" type="button">
+
+                            Save to gallery
+
+                        </button>
+
+                    </div>
+
+
+                    <!-- RESULT -->
                     <div class="plot-card">
+
                         <div class="plot-card-head">
-                            <div class="plot-card-title">Result spectrogram</div>
+
+                            <div class="plot-card-title">
+                                Result spectrogram
+                            </div>
+
                         </div>
+
                         <div id="maskResultSpectrogram"></div>
+
                     </div>
+
 
                     <div id="maskReadouts" class="readout-row"></div>
 
+
                     <div class="player-row">
-                        <div class="player-block">
-                            <div class="player-block-label">Original audio</div>
-                            <audio id="maskOriginalPlayer" controls></audio>
-                        </div>
 
                         <div class="player-block">
-                            <div class="player-block-label">Masked reconstruction</div>
-                            <audio id="maskedPlayer" controls></audio>
+
+                            <div class="player-block-label">
+                                Original audio
+                            </div>
+
+                            <audio id="maskOriginalPlayer" controls>
+                            </audio>
+
                         </div>
+
+
+                        <div class="player-block">
+
+                            <div class="player-block-label">
+                                Masked reconstruction
+                            </div>
+
+                            <audio id="maskedPlayer" controls>
+                            </audio>
+
+                        </div>
+
                     </div>
+
                 </div>
 
                 <div id="tabRetention" class="lab-panel">

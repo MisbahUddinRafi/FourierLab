@@ -766,3 +766,457 @@ audio { width: 100%; height: 36px; }
     }
 
 }
+
+
+
+
+/* =========================================================
+   MASKING WORKSPACE
+   ========================================================= */
+
+.mask-workspace-card {
+    padding-bottom: 14px;
+}
+
+.mask-workspace-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 14px;
+}
+
+.mask-workspace-subtitle {
+    margin-top: 5px;
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    color: var(--text-dim);
+}
+
+.mask-selected-readout {
+    flex-shrink: 0;
+    padding: 7px 11px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-raised);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+}
+
+.mask-selected-readout span {
+    color: var(--amber);
+    font-weight: 600;
+}
+
+
+/* =========================================================
+   EDIT / ADD MODE
+   ========================================================= */
+
+.mask-mode-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.mask-mode-toggle {
+    display: inline-flex;
+    padding: 3px;
+    background: var(--panel-raised);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+}
+
+.mask-mode-btn {
+    border: 0;
+    background: transparent;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    padding: 7px 12px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition:
+        background 0.15s ease,
+        color 0.15s ease;
+}
+
+.mask-mode-btn:hover {
+    color: var(--text);
+}
+
+.mask-mode-btn.active {
+    background: var(--panel);
+    color: var(--amber);
+    box-shadow: 0 0 0 1px var(--border);
+}
+
+.mask-mode-hint {
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-size: 0.76rem;
+    text-align: right;
+}
+
+
+/* =========================================================
+   REGION DROPDOWN
+   ========================================================= */
+
+.mask-region-panel {
+    position: relative;
+    margin-bottom: 14px;
+}
+
+.mask-region-panel-head {
+    margin-bottom: 6px;
+}
+
+.mask-region-dropdown {
+    position: relative;
+    width: 100%;
+}
+
+.mask-region-dropdown-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    padding: 9px 11px;
+
+    background: var(--panel-raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+
+    cursor: pointer;
+    text-align: left;
+}
+
+.mask-region-dropdown-btn:hover {
+    border-color: var(--text-dim);
+}
+
+.mask-dropdown-chevron {
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    transition: transform 0.15s ease;
+}
+
+.mask-region-dropdown.open .mask-dropdown-chevron {
+    transform: rotate(180deg);
+}
+
+.mask-region-dropdown-menu {
+    position: absolute;
+    z-index: 30;
+
+    top: calc(100% + 5px);
+    left: 0;
+    right: 0;
+
+    display: none;
+
+    max-height: 220px;
+    overflow-y: auto;
+
+    background: var(--panel-raised);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.mask-region-dropdown.open .mask-region-dropdown-menu {
+    display: block;
+}
+
+.mask-region-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+
+    width: 100%;
+    padding: 9px 11px;
+
+    background: transparent;
+    border: 0;
+
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.76rem;
+
+    cursor: pointer;
+    text-align: left;
+}
+
+.mask-region-item:hover {
+    background: rgba(255, 255, 255, 0.035);
+}
+
+.mask-region-item.selected {
+    background: rgba(255, 190, 70, 0.08);
+    color: var(--amber);
+}
+
+.mask-region-item-label {
+    flex: 1;
+}
+
+.mask-region-item-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-size: 0.72rem;
+}
+
+.mask-region-item-checkbox input {
+    accent-color: var(--amber);
+    cursor: pointer;
+}
+
+.mask-region-empty {
+    padding: 12px;
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-size: 0.76rem;
+}
+
+
+/* =========================================================
+   REGION EDITOR
+   ========================================================= */
+
+.mask-editor-card {
+    padding: 15px 16px;
+
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+
+    margin-bottom: 14px;
+}
+
+.mask-editor-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+}
+
+.mask-editor-grid .field {
+    margin-bottom: 0;
+}
+
+.mask-editor-lower {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    gap: 20px;
+
+    margin-top: 15px;
+    padding-top: 14px;
+
+    border-top: 1px solid var(--border);
+}
+
+.mask-operation-block {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.mask-operation-block .field-label {
+    margin: 0;
+}
+
+.mask-operation-toggle {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.mask-operation-option {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 0.78rem;
+
+    cursor: pointer;
+}
+
+.mask-operation-option input {
+    accent-color: var(--amber);
+}
+
+.mask-region-management {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.mask-enabled-option {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 0.78rem;
+
+    cursor: pointer;
+}
+
+.mask-enabled-option input {
+    accent-color: var(--amber);
+}
+
+.btn-danger {
+    background: transparent;
+    border-color: #d85c5c;
+    color: #e87575;
+}
+
+.btn-danger:hover {
+    background: rgba(216, 92, 92, 0.08);
+}
+
+
+/* =========================================================
+   OVERLAP NOTE
+   ========================================================= */
+
+.mask-overlap-note {
+    margin-top: 13px;
+    padding: 9px 11px;
+
+    border-left: 2px solid var(--amber);
+
+    background: rgba(255, 190, 70, 0.035);
+
+    color: var(--text-dim);
+
+    font-family: var(--sans);
+    font-size: 0.72rem;
+    line-height: 1.5;
+}
+
+.mask-overlap-title {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.mask-overlap-rule {
+    margin-left: 10px;
+    font-family: var(--mono);
+    color: var(--text-dim);
+}
+
+
+/* =========================================================
+   MASK ACTIONS
+   ========================================================= */
+
+.mask-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+
+    margin-bottom: 20px;
+}
+
+.mask-actions .btn {
+    width: 100%;
+    justify-content: center;
+}
+
+
+/* =========================================================
+   EMPTY / DISABLED EDITOR STATE
+   ========================================================= */
+
+.mask-editor-card.region-empty {
+    opacity: 0.72;
+}
+
+.mask-editor-card.region-empty input,
+.mask-editor-card.region-empty button,
+.mask-editor-card.region-empty label {
+    pointer-events: none;
+}
+
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+
+@media (max-width: 800px) {
+
+    .mask-workspace-head {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .mask-selected-readout {
+        width: fit-content;
+    }
+
+    .mask-mode-bar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .mask-mode-hint {
+        text-align: left;
+    }
+
+    .mask-editor-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .mask-editor-lower {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .mask-actions {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 520px) {
+
+    .mask-editor-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .mask-operation-block {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 9px;
+    }
+
+    .mask-region-management {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .mask-overlap-rule {
+        display: block;
+        margin: 3px 0 0;
+    }
+}
