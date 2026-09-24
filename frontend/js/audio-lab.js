@@ -376,6 +376,8 @@ function wirePlaybackTracking() {
 
         "magPhaseOriginalPlayer",
         "magOnlyPlayer",
+
+        "phaseOriginalPlayer",
         "phaseOnlyPlayer",
 
         "maskOriginalPlayer",
@@ -438,12 +440,17 @@ function resetResults() {
     // Clear audio players
     const playerIds = [
         "originalPlayer",
+
         "magPhaseOriginalPlayer",
-        "maskOriginalPlayer",
-        "retentionOriginalPlayer",
         "magOnlyPlayer",
+
+        "phaseOriginalPlayer",
         "phaseOnlyPlayer",
+
+        "maskOriginalPlayer",
         "maskedPlayer",
+
+        "retentionOriginalPlayer",
         "retainedPlayer",
     ];
 
@@ -557,8 +564,11 @@ async function setAudioFromSource() {
     // Overview
     el("originalPlayer").src = audioSrc;
 
-    // Magnitude & Phase
+    // Magnitude section
     el("magPhaseOriginalPlayer").src = audioSrc;
+
+    // Phase section
+    el("phaseOriginalPlayer").src = audioSrc;
 
     // Masking
     el("maskOriginalPlayer").src = audioSrc;

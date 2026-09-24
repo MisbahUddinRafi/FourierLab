@@ -432,7 +432,7 @@ a { color: inherit; text-decoration: none; }
 
 
 /* =========================================== */
-/* UPDATE FOR AUDIO-LAB */
+/* FOR AUDIO-LAB */
 /* =========================================== */
 
 /* ---------- lab page: sidebar controls ---------- */
@@ -610,4 +610,97 @@ audio { width: 100%; height: 36px; }
   .sidebar { width: 100%; }
   .plot-row { grid-template-columns: 1fr; }
   .mask-controls { grid-template-columns: repeat(2, 1fr); }
+}
+
+
+
+
+/* =========================================================
+   Audio Lab - Magnitude / Phase layout
+   ========================================================= */
+
+#tabMagPhase .mag-phase-section {
+    width: 100%;
+    margin-bottom: 28px;
+}
+
+#tabMagPhase .plot-card {
+    width: 100%;
+}
+
+#tabMagPhase .component-action-row {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    margin-top: 14px;
+    margin-bottom: 14px;
+}
+
+#tabMagPhase .component-audio-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+    width: 100%;
+}
+
+#tabMagPhase .component-audio-row .player-block {
+    min-width: 0;
+}
+
+#tabMagPhase .component-audio-row audio {
+    width: 100%;
+    max-width: 100%;
+}
+
+@media (max-width: 800px) {
+    #tabMagPhase .component-audio-row {
+        grid-template-columns: 1fr;
+    }
+}
+
+
+/* =========================================================
+   Audio Lab - Retention plot layout
+   ========================================================= */
+
+.retention-plots {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+    width: 100%;
+}
+
+.retention-plot-card {
+    min-width: 0;
+    width: 100%;
+    overflow: hidden;
+}
+
+.retention-plot-card > div:last-child {
+    width: 100%;
+    min-width: 0;
+}
+
+
+/* Prevent Plotly from overflowing its card */
+.retention-plot-card .js-plotly-plot,
+.retention-plot-card .plot-container,
+.retention-plot-card .svg-container {
+    max-width: 100%;
+}
+
+
+/* Smaller screens: stack retention plots */
+@media (max-width: 900px) {
+    .retention-plots {
+        grid-template-columns: 1fr;
+    }
+
+    .component-player-row {
+        flex-wrap: wrap;
+    }
+
+    .component-player-row .component-action {
+        min-width: 100%;
+    }
 }

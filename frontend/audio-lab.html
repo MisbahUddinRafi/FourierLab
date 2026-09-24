@@ -174,48 +174,84 @@
                 </div>
 
                 <div id="tabMagPhase" class="lab-panel">
-                    <div class="plot-row">
+
+                    <!-- =========================
+         MAGNITUDE SECTION
+         ========================= -->
+
+                    <div class="mag-phase-section">
+
                         <div class="plot-card">
                             <div class="plot-card-head">
                                 <div class="plot-card-title">Magnitude (dB)</div>
                             </div>
                             <div id="magSpectrogram"></div>
                         </div>
+
+                        <div class="component-action-row">
+                            <button id="magOnlyBtn" class="btn btn-outline-cyan btn-sm">
+                                Generate magnitude only
+                            </button>
+                        </div>
+
+                        <div class="player-row component-audio-row">
+
+                            <div class="player-block">
+                                <div class="player-block-label">Original audio</div>
+                                <audio id="magPhaseOriginalPlayer" controls></audio>
+                            </div>
+
+                            <div class="player-block">
+                                <div class="player-block-label">Magnitude-only reconstructed audio</div>
+                                <audio id="magOnlyPlayer" controls></audio>
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- =========================
+         PHASE SECTION
+         ========================= -->
+
+                    <div class="mag-phase-section">
+
                         <div class="plot-card">
                             <div class="plot-card-head">
                                 <div class="plot-card-title">Phase (rad)</div>
                             </div>
                             <div id="phasePlot"></div>
                         </div>
-                    </div>
-                    <div class="plot-hint">Magnitude carries loudness; phase carries timing/alignment. Generate each
-                        below and compare by ear.</div>
-                    <div class="player-row">
-                        <div class="player-block">
-                            <div class="player-block-label">Original audio</div>
-                            <audio id="magPhaseOriginalPlayer" controls></audio>
-                        </div>
 
-                        <div class="player-block">
-                            <button id="magOnlyBtn" class="btn btn-outline-cyan btn-sm">
-                                Generate magnitude-only
-                            </button>
-                            <div class="player-block-label" style="margin-top:10px;">
-                                Magnitude-only playback
-                            </div>
-                            <audio id="magOnlyPlayer" controls></audio>
-                        </div>
-
-                        <div class="player-block">
+                        <div class="component-action-row">
                             <button id="phaseOnlyBtn" class="btn btn-outline-violet btn-sm">
-                                Generate phase-only
+                                Generate phase only
                             </button>
-                            <div class="player-block-label" style="margin-top:10px;">
-                                Phase-only playback
-                            </div>
-                            <audio id="phaseOnlyPlayer" controls></audio>
                         </div>
+
+                        <div class="player-row component-audio-row">
+
+                            <div class="player-block">
+                                <div class="player-block-label">Original audio</div>
+                                <audio id="phaseOriginalPlayer" controls></audio>
+                            </div>
+
+                            <div class="player-block">
+                                <div class="player-block-label">Phase-only reconstructed audio</div>
+                                <audio id="phaseOnlyPlayer" controls></audio>
+                            </div>
+
+                        </div>
+
                     </div>
+
+
+                    <div class="plot-hint">
+                        Magnitude carries loudness; phase carries timing and alignment.
+                        Generate each reconstruction and compare it with the original audio.
+                    </div>
+
                 </div>
 
                 <div id="tabMasking" class="lab-panel">
@@ -288,19 +324,22 @@
                         <button id="sweepBtn" class="btn btn-outline-cyan btn-sm">Run Sweep</button>
                     </div>
 
-                    <div class="plot-row">
-                        <div class="plot-card">
+                    <div class="retention-plots">
+
+                        <div class="plot-card retention-plot-card">
                             <div class="plot-card-head">
                                 <div class="plot-card-title">Original</div>
                             </div>
                             <div id="retainSpectrogram"></div>
                         </div>
-                        <div class="plot-card">
+
+                        <div class="plot-card retention-plot-card">
                             <div class="plot-card-head">
                                 <div class="plot-card-title">Retained</div>
                             </div>
                             <div id="retainResultSpectrogram"></div>
                         </div>
+
                     </div>
 
                     <div id="retainReadout" class="readout-row"></div>
