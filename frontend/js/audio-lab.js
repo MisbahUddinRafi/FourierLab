@@ -199,9 +199,93 @@ function initTabs() {
     });
 }
 
+/* reset before analyzing */
+function resetResults() {
+    // Reset analysis state
+    state.lastAnalyze = null;
+    state.lastMask = null;
+    state.lastRetain = null;
+    state.duration = 0;
+
+    // Clear plots
+    const plotIds = [
+        "waveformPlot",
+        "overviewSpectrogram",
+        "magSpectrogram",
+        "phasePlot",
+        "maskSpectrogram",
+        "maskResultSpectrogram",
+        "retainSpectrogram",
+        "retainResultSpectrogram",
+        "sweepChart",
+    ];
+
+    plotIds.forEach((id) => {
+        const plot = el(id);
+
+        if (plot && plot.data) {
+            Plotly.purge(plot);
+        }
+
+        if (plot) {
+            plot.innerHTML = "";
+        }
+    });
+
+    // Clear audio players
+    const playerIds = [
+        "originalPlayer",
+        "magOnlyPlayer",
+        "phaseOnlyPlayer",
+        "maskedPlayer",
+        "retainedPlayer",
+    ];
+
+    playerIds.forEach((id) => {
+        const player = el(id);
+
+        if (player) {
+            player.pause();
+            player.removeAttribute("src");
+            player.load();
+        }
+    });
+
+    // Clear result readouts
+    el("maskReadouts").innerHTML = "";
+    el("retainReadout").innerHTML = "";
+    el("metricsBody").innerHTML = "";
+
+    // Reset sidebar
+    el("sidebarStatus").textContent = "No audio analyzed yet.";
+    el("sidebarStatus").classList.remove("loaded");
+    el("sidebarReadout").innerHTML = "";
+
+    // Disable tabs until the new analysis finishes
+    document.querySelectorAll(".lab-tab").forEach((tab) => {
+        tab.disabled = true;
+    });
+
+    // Show empty state
+    el("emptyState").style.display = "block";
+    el("labBody").style.display = "none";
+
+    // Reset mask selection values
+    el("timeMin").value = "";
+    el("timeMax").value = "";
+    el("freqMin").value = "";
+    el("freqMax").value = "";
+
+    // Reset status message
+    setStatus("");
+}
+
 /* ---------- main analyze flow ---------- */
 
 async function runAnalyze() {
+    // reset the previous results
+    resetResults();
+
     try {
         await resolveSource();
         state.sr = parseInt(el("srSelect").value, 10);
