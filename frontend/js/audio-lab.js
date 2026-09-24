@@ -11,6 +11,13 @@ const state = {
     freqScale: "linear",
 };
 
+
+const playbackState = {
+    activePlayer: null,
+    animationFrame: null,
+};
+
+
 const MAGNITUDE_COLORSCALE = "Viridis";
 const PHASE_COLORSCALE = [
     [0, "#C792EA"],
@@ -127,7 +134,15 @@ function renderWaveform(containerId, waveform) {
         showlegend: false,
         height: 200,
     });
-    Plotly.newPlot(containerId, [traceMax, traceMin], layout, { displayModeBar: false, responsive: true });
+
+    Plotly.newPlot(containerId, [traceMax, traceMin], layout, {
+        displayModeBar: false,
+        responsive: true
+    }).then(() => {
+        if (playbackState.activePlayer) {
+            updatePlotPlayback(containerId, playbackState.activePlayer.currentTime || 0);
+        }
+    });
 }
 
 function renderSpectrogram(containerId, freqs, times, magnitude_db, options = {}) {
@@ -143,7 +158,17 @@ function renderSpectrogram(containerId, freqs, times, magnitude_db, options = {}
         height: 320,
         dragmode: options.selectable ? "select" : "zoom",
     });
-    Plotly.newPlot(containerId, [trace], layout, { displayModeBar: true, responsive: true, modeBarButtonsToRemove: ["lasso2d"] });
+
+
+    Plotly.newPlot(containerId, [trace], layout, {
+        displayModeBar: true,
+        responsive: true,
+        modeBarButtonsToRemove: ["lasso2d"]
+    }).then(() => {
+        if (playbackState.activePlayer) {
+            updatePlotPlayback(containerId, playbackState.activePlayer.currentTime || 0);
+        }
+    });
 
     if (options.onSelect) {
         document.getElementById(containerId).on("plotly_selected", (evt) => {
@@ -164,7 +189,15 @@ function renderPhase(containerId, freqs, times, phase) {
         yaxis: { title: "Frequency (Hz)", type: state.freqScale },
         height: 320,
     });
-    Plotly.newPlot(containerId, [trace], layout, { displayModeBar: false, responsive: true });
+
+    Plotly.newPlot(containerId, [trace], layout, {
+        displayModeBar: false,
+        responsive: true
+    }).then(() => {
+        if (playbackState.activePlayer) {
+            updatePlotPlayback(containerId, playbackState.activePlayer.currentTime || 0);
+        }
+    });
 }
 
 function renderSweepChart(containerId, fractions, snrValues) {
@@ -185,6 +218,176 @@ function renderSweepChart(containerId, fractions, snrValues) {
     });
     Plotly.newPlot(containerId, [trace], layout, { displayModeBar: false, responsive: true });
 }
+
+
+/* -------------- play-back cursor --------------- */
+
+function updatePlaybackCursor() {
+    const player = playbackState.activePlayer;
+
+    if (!player) return;
+
+    const currentTime = player.currentTime || 0;
+
+    updatePlotPlayback("waveformPlot", currentTime);
+    updatePlotPlayback("overviewSpectrogram", currentTime);
+
+    updatePlotPlayback("magSpectrogram", currentTime);
+    updatePlotPlayback("phasePlot", currentTime);
+
+    updatePlotPlayback("maskSpectrogram", currentTime);
+    updatePlotPlayback("maskResultSpectrogram", currentTime);
+
+    updatePlotPlayback("retainSpectrogram", currentTime);
+    updatePlotPlayback("retainResultSpectrogram", currentTime);
+
+    if (!player.paused && !player.ended) {
+        playbackState.animationFrame = requestAnimationFrame(updatePlaybackCursor);
+    } else {
+        playbackState.animationFrame = null;
+    }
+}
+
+
+function updatePlotPlayback(plotId, currentTime) {
+    const plot = el(plotId);
+
+    if (!plot || !plot.data || !plot.layout) return;
+
+    const duration = playbackState.activePlayer?.duration;
+
+    if (!duration || !Number.isFinite(duration) || duration <= 0) {
+        return;
+    }
+
+    const xaxis = plot.layout.xaxis;
+
+    if (!xaxis) return;
+
+    const range = xaxis.range;
+
+    if (!range || range.length < 2) return;
+
+    const xMin = range[0];
+    const xMax = range[1];
+
+    // Keep the cursor inside the displayed time range.
+    const x = Math.max(xMin, Math.min(currentTime, xMax));
+
+    const shapes = plot.layout.shapes || [];
+
+    // Preserve any existing shapes that are not playback shapes.
+    const otherShapes = shapes.filter(
+        (shape) => shape.name !== "playback-cursor" && shape.name !== "playback-progress"
+    );
+
+    const playbackShapes = [
+        {
+            name: "playback-progress",
+            type: "rect",
+            xref: "x",
+            yref: "paper",
+            x0: xMin,
+            x1: x,
+            y0: 0,
+            y1: 1,
+            fillcolor: "rgba(120, 130, 145, 0.10)",
+            line: {
+                width: 0,
+            },
+            layer: "below",
+        },
+        {
+            name: "playback-cursor",
+            type: "line",
+            xref: "x",
+            yref: "paper",
+            x0: x,
+            x1: x,
+            y0: 0,
+            y1: 1,
+            line: {
+                color: "#F5F7FA",
+                width: 2,
+            },
+            layer: "above",
+        },
+    ];
+
+    Plotly.relayout(plot, {
+        shapes: [...otherShapes, ...playbackShapes],
+    });
+}
+
+
+function setActivePlaybackPlayer(player) {
+    if (!player) return;
+
+    playbackState.activePlayer = player;
+
+    if (playbackState.animationFrame) {
+        cancelAnimationFrame(playbackState.animationFrame);
+        playbackState.animationFrame = null;
+    }
+
+    updatePlaybackCursor();
+}
+
+
+function wirePlaybackPlayer(playerId) {
+    const player = el(playerId);
+
+    if (!player) return;
+
+    // Clicking / interacting with a player makes it the active player.
+    player.addEventListener("play", () => {
+        setActivePlaybackPlayer(player);
+    });
+
+    player.addEventListener("timeupdate", () => {
+        setActivePlaybackPlayer(player);
+    });
+
+    player.addEventListener("seeking", () => {
+        setActivePlaybackPlayer(player);
+    });
+
+    player.addEventListener("seeked", () => {
+        setActivePlaybackPlayer(player);
+    });
+
+    player.addEventListener("pause", () => {
+        if (playbackState.activePlayer === player) {
+            updatePlaybackCursor();
+        }
+    });
+
+    player.addEventListener("ended", () => {
+        if (playbackState.activePlayer === player) {
+            updatePlaybackCursor();
+        }
+    });
+}
+
+
+function wirePlaybackTracking() {
+    const playerIds = [
+        "originalPlayer",
+
+        "magPhaseOriginalPlayer",
+        "magOnlyPlayer",
+        "phaseOnlyPlayer",
+
+        "maskOriginalPlayer",
+        "maskedPlayer",
+
+        "retentionOriginalPlayer",
+        "retainedPlayer",
+    ];
+
+    playerIds.forEach(wirePlaybackPlayer);
+}
+
 
 /* ---------- tab switching ---------- */
 
@@ -628,6 +831,7 @@ window.addEventListener("DOMContentLoaded", () => {
     wireUploadDropzone();
     wireFractionSlider();
     wireFreqToggle();
+    wirePlaybackTracking();
     refreshLibrary();
 
     el("analyzeBtn").addEventListener("click", runAnalyze);
