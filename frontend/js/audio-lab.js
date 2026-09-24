@@ -235,6 +235,9 @@ function resetResults() {
     // Clear audio players
     const playerIds = [
         "originalPlayer",
+        "magPhaseOriginalPlayer",
+        "maskOriginalPlayer",
+        "retentionOriginalPlayer",
         "magOnlyPlayer",
         "phaseOnlyPlayer",
         "maskedPlayer",
@@ -346,9 +349,19 @@ async function runAnalyze() {
 }
 
 async function setAudioFromSource() {
-    // Everything under assets/ is served at /media, so the source file
-    // itself can be played back directly without a round trip.
-    el("originalPlayer").src = "/media/audio/" + state.source;
+    const audioSrc = "/media/audio/" + state.source;
+
+    // Overview
+    el("originalPlayer").src = audioSrc;
+
+    // Magnitude & Phase
+    el("magPhaseOriginalPlayer").src = audioSrc;
+
+    // Masking
+    el("maskOriginalPlayer").src = audioSrc;
+
+    // Retention
+    el("retentionOriginalPlayer").src = audioSrc;
 }
 
 async function apiPost_json(path, body) {

@@ -192,13 +192,27 @@
                         below and compare by ear.</div>
                     <div class="player-row">
                         <div class="player-block">
-                            <button id="magOnlyBtn" class="btn btn-outline-cyan btn-sm">Generate magnitude-only</button>
-                            <div class="player-block-label" style="margin-top:10px;">Magnitude-only playback</div>
+                            <div class="player-block-label">Original audio</div>
+                            <audio id="magPhaseOriginalPlayer" controls></audio>
+                        </div>
+
+                        <div class="player-block">
+                            <button id="magOnlyBtn" class="btn btn-outline-cyan btn-sm">
+                                Generate magnitude-only
+                            </button>
+                            <div class="player-block-label" style="margin-top:10px;">
+                                Magnitude-only playback
+                            </div>
                             <audio id="magOnlyPlayer" controls></audio>
                         </div>
+
                         <div class="player-block">
-                            <button id="phaseOnlyBtn" class="btn btn-outline-violet btn-sm">Generate phase-only</button>
-                            <div class="player-block-label" style="margin-top:10px;">Phase-only playback</div>
+                            <button id="phaseOnlyBtn" class="btn btn-outline-violet btn-sm">
+                                Generate phase-only
+                            </button>
+                            <div class="player-block-label" style="margin-top:10px;">
+                                Phase-only playback
+                            </div>
                             <audio id="phaseOnlyPlayer" controls></audio>
                         </div>
                     </div>
@@ -245,6 +259,11 @@
 
                     <div class="player-row">
                         <div class="player-block">
+                            <div class="player-block-label">Original audio</div>
+                            <audio id="maskOriginalPlayer" controls></audio>
+                        </div>
+
+                        <div class="player-block">
                             <div class="player-block-label">Masked reconstruction</div>
                             <audio id="maskedPlayer" controls></audio>
                         </div>
@@ -287,6 +306,11 @@
                     <div id="retainReadout" class="readout-row"></div>
 
                     <div class="player-row">
+                        <div class="player-block">
+                            <div class="player-block-label">Original audio</div>
+                            <audio id="retentionOriginalPlayer" controls></audio>
+                        </div>
+
                         <div class="player-block">
                             <div class="player-block-label">Reconstructed audio</div>
                             <audio id="retainedPlayer" controls></audio>
