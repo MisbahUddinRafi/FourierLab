@@ -307,21 +307,48 @@
                 </div>
 
                 <div id="tabRetention" class="lab-panel">
-                    <div class="action-row">
-                        <div class="field" style="min-width:260px;">
-                            <label class="field-label">Strategy</label>
-                            <select id="strategySelect">
-                                <option value="low_frequency">Low-frequency (band-limit)</option>
-                                <option value="top_magnitude">Top-magnitude (loudest bins)</option>
-                            </select>
+                    <!-- Retention controls -->
+                    <div class="retention-controls">
+
+                        <!-- Strategy + Fraction -->
+                        <div class="retention-settings">
+
+                            <div class="field retention-strategy">
+                                <label class="field-label">Strategy</label>
+                                <select id="strategySelect">
+                                    <option value="low_frequency">Low-frequency (band-limit)</option>
+                                    <option value="top_magnitude">Top-magnitude (loudest bins)</option>
+                                </select>
+                            </div>
+
+                            <div class="field retention-fraction">
+                                <label class="field-label">
+                                    Fraction retained:
+                                    <span id="fractionLabel">30%</span>
+                                </label>
+
+                                <input type="range" id="fractionSlider" min="0.01" max="1" step="0.01" value="0.3">
+                            </div>
+
                         </div>
-                        <div class="field" style="flex:1; min-width:220px;">
-                            <label class="field-label">Fraction retained: <span id="fractionLabel">30%</span></label>
-                            <input type="range" id="fractionSlider" min="0.01" max="1" step="0.01" value="0.3">
+
+                        <!-- Action buttons -->
+                        <div class="retention-actions">
+
+                            <button id="applyRetentionBtn" class="btn btn-primary btn-sm">
+                                Reconstruct
+                            </button>
+
+                            <button id="saveRetainBtn" class="btn btn-ghost btn-sm">
+                                Save to gallery
+                            </button>
+
+                            <button id="sweepBtn" class="btn btn-outline-cyan btn-sm">
+                                Run Sweep
+                            </button>
+
                         </div>
-                        <button id="applyRetentionBtn" class="btn btn-primary btn-sm">Reconstruct</button>
-                        <button id="saveRetainBtn" class="btn btn-ghost btn-sm">Save to gallery</button>
-                        <button id="sweepBtn" class="btn btn-outline-cyan btn-sm">Run Sweep</button>
+
                     </div>
 
                     <div class="retention-plots">

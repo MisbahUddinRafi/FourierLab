@@ -704,3 +704,65 @@ audio { width: 100%; height: 36px; }
         min-width: 100%;
     }
 }
+
+
+
+
+/* ================================
+   RETENTION CONTROLS
+   ================================ */
+
+.retention-controls {
+    width: 100%;
+    margin-bottom: 24px;
+}
+
+/* Strategy + fraction row */
+.retention-settings {
+    display: grid;
+    grid-template-columns: minmax(260px, 0.8fr) minmax(300px, 1.5fr);
+    gap: 24px;
+    width: 100%;
+    align-items: end;
+}
+
+/* Make fields fill their grid cells */
+.retention-settings .field {
+    width: 100%;
+    min-width: 0;
+}
+
+.retention-settings select,
+.retention-settings input[type="range"] {
+    width: 100%;
+}
+
+/* Buttons row */
+.retention-actions {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    width: 100%;
+    margin-top: 18px;
+}
+
+.retention-actions .btn {
+    width: 100%;
+    justify-content: center;
+}
+
+
+/* Responsive */
+@media (max-width: 800px) {
+
+    .retention-settings {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+
+    .retention-actions {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+
+}
