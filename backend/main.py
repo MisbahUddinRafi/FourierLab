@@ -1,3 +1,5 @@
+# backend/main.py
+
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -14,6 +16,9 @@ app = FastAPI(title="FourierLab API")
 
 from routes.audio_routes import router as audio_router
 app.include_router(audio_router, prefix="/api/audio")
+
+from routes.music_routes import router as music_router
+app.include_router(music_router, prefix="/api")
 
 # from routes.image_routes import router as image_router
 # app.include_router(image_router, prefix="/api/image")

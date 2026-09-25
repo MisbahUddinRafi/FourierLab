@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FourierLab &middot; Music Lab</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+
+<body>
+
+    <header class="topbar">
+        <div class="brand">
+            <img src="assets/logo.png" alt="" class="logo-img"
+                onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+            <div class="logo-fallback" style="display:none;">FL</div>
+            <div class="brand-name">Fourier<span>Lab</span></div>
+        </div>
+        <nav class="topnav">
+            <a href="index.html">Home</a>
+            <a href="image-lab.html">Image Lab</a>
+            <a href="audio-lab.html">Audio Lab</a>
+            <a href="music-lab.html" class="active">Music Lab</a>
+        </nav>
+    </header>
+
+    <div class="app-layout music-layout">
+
+        <main class="content music-content">
+
+            <!-- TOP-LEVEL TABS: Separate / Mix -->
+            <div class="lab-tabs music-toplevel-tabs">
+                <button class="lab-tab active" data-target="tabSeparate">Separate</button>
+                <button class="lab-tab" data-target="tabMix">Mix</button>
+            </div>
+
+            <div id="statusBox" class="status-msg" style="display:none;"></div>
+
+            <!-- =========================================================
+                 TAB 1 — SEPARATE
+                 ========================================================= -->
+            <div id="tabSeparate" class="lab-panel active">
+
+                <div class="plot-card">
+                    <div class="plot-card-head">
+                        <div class="plot-card-title">Upload a mixed track</div>
+                    </div>
+
+                    <input type="file" id="separateUploadInput" accept=".wav,.mp3,.flac,.ogg,.m4a,.mp4,audio/*" hidden>
+
+                    <div id="separateDropzone" class="upload-dropzone">
+                        <div class="upload-dropzone-icon">&uarr;</div>
+                        <div class="upload-dropzone-title">Drop audio file here</div>
+                        <div class="upload-dropzone-subtitle">or click to browse</div>
+                        <div class="upload-dropzone-formats">
+                            WAV &middot; MP3 &middot; FLAC &middot; OGG &middot; M4A &middot; MP4
+                        </div>
+                    </div>
+
+                    <div id="separateSelectedFileName" class="selected-file-name"></div>
+
+                    <div class="component-action-row">
+                        <button id="separateBtn" class="btn btn-primary btn-sm" disabled>
+                            Separate
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Original -->
+                <div id="separateOriginalBlock" class="music-result-block" style="display:none;">
+                    <div class="plot-card">
+                        <div class="plot-card-head">
+                            <div class="plot-card-title">Original</div>
+                        </div>
+                        <div id="separateOriginalWaveform"></div>
+                        <div id="separateOriginalSpectrogram"></div>
+                    </div>
+                    <div class="player-row">
+                        <div class="player-block">
+                            <div class="player-block-label">Original audio</div>
+                            <audio id="separateOriginalPlayer" controls></audio>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Vocal + Instrumental results -->
+                <div id="separateResultsGrid" class="music-stems-grid" style="display:none;">
+
+                    <div class="music-stem-column">
+                        <div class="plot-card">
+                            <div class="plot-card-head">
+                                <div class="plot-card-title">Vocal</div>
+                            </div>
+                            <div id="vocalWaveform"></div>
+                            <div id="vocalSpectrogram"></div>
+                        </div>
+                        <div class="player-row">
+                            <div class="player-block">
+                                <div class="player-block-label">Vocal audio</div>
+                                <audio id="vocalPlayer" controls></audio>
+                            </div>
+                        </div>
+                        <div class="component-action-row">
+                            <button id="useVocalInMixerBtn" class="btn btn-outline-cyan btn-sm">
+                                Use in Mixer
+                            </button>
+                            <a id="vocalDownloadLink" class="btn btn-ghost btn-sm" download="vocal.wav">
+                                Download
+                            </a>
+                        </div>
+                    </div>
+
+                    <div class="music-stem-column">
+                        <div class="plot-card">
+                            <div class="plot-card-head">
+                                <div class="plot-card-title">Instrumental</div>
+                            </div>
+                            <div id="instrumentalWaveform"></div>
+                            <div id="instrumentalSpectrogram"></div>
+                        </div>
+                        <div class="player-row">
+                            <div class="player-block">
+                                <div class="player-block-label">Instrumental audio</div>
+                                <audio id="instrumentalPlayer" controls></audio>
+                            </div>
+                        </div>
+                        <div class="component-action-row">
+                            <button id="useInstrumentalInMixerBtn" class="btn btn-outline-violet btn-sm">
+                                Use in Mixer
+                            </button>
+                            <a id="instrumentalDownloadLink" class="btn btn-ghost btn-sm" download="instrumental.wav">
+                                Download
+                            </a>
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+
+            <!-- =========================================================
+                 TAB 2 — MIX
+                 ========================================================= -->
+            <div id="tabMix" class="lab-panel">
+
+                <div class="music-mixer-grid">
+
+                    <!-- Instrumental slot -->
+                    <div class="plot-card music-slot-card">
+                        <div class="plot-card-head">
+                            <div class="plot-card-title">Instrumental</div>
+                        </div>
+
+                        <input type="file" id="mixInstrumentalInput" accept=".wav,.mp3,.flac,.ogg,.m4a,.mp4,audio/*" hidden>
+
+                        <div id="mixInstrumentalDropzone" class="upload-dropzone upload-dropzone-sm">
+                            <div class="upload-dropzone-icon">&uarr;</div>
+                            <div class="upload-dropzone-title">Drop instrumental here</div>
+                            <div class="upload-dropzone-subtitle">or click to browse &mdash; or send from Separate tab</div>
+                        </div>
+
+                        <div id="mixInstrumentalFileName" class="selected-file-name"></div>
+
+                        <div class="player-row">
+                            <div class="player-block">
+                                <div class="player-block-label">Instrumental audio</div>
+                                <audio id="mixInstrumentalPlayer" controls></audio>
+                            </div>
+                        </div>
+
+                        <div class="field">
+                            <label class="field-label">
+                                Gain: <span id="instrumentalGainLabel">0 dB</span>
+                            </label>
+                            <input type="range" id="instrumentalGainSlider" min="-24" max="12" step="0.5" value="0">
+                        </div>
+                    </div>
+
+                    <!-- Vocal slot -->
+                    <div class="plot-card music-slot-card">
+                        <div class="plot-card-head">
+                            <div class="plot-card-title">Vocal</div>
+                        </div>
+
+                        <input type="file" id="mixVocalInput" accept=".wav,.mp3,.flac,.ogg,.m4a,.mp4,audio/*" hidden>
+
+                        <div id="mixVocalDropzone" class="upload-dropzone upload-dropzone-sm">
+                            <div class="upload-dropzone-icon">&uarr;</div>
+                            <div class="upload-dropzone-title">Drop vocal here</div>
+                            <div class="upload-dropzone-subtitle">or click to browse &mdash; or send from Separate tab</div>
+                        </div>
+
+                        <div id="mixVocalFileName" class="selected-file-name"></div>
+
+                        <div class="player-row">
+                            <div class="player-block">
+                                <div class="player-block-label">Vocal audio</div>
+                                <audio id="mixVocalPlayer" controls></audio>
+                            </div>
+                        </div>
+
+                        <div class="field">
+                            <label class="field-label">
+                                Gain: <span id="vocalGainLabel">0 dB</span>
+                            </label>
+                            <input type="range" id="vocalGainSlider" min="-24" max="12" step="0.5" value="0">
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Alignment -->
+                <div class="plot-card">
+                    <div class="plot-card-head">
+                        <div class="plot-card-title">Alignment</div>
+                    </div>
+
+                    <div class="mask-editor-grid music-offset-grid">
+                        <div class="field">
+                            <label class="field-label">Suggested offset (s)</label>
+                            <div id="suggestedOffsetReadout" class="readout-value">&mdash;</div>
+                        </div>
+
+                        <div class="field">
+                            <label class="field-label">Offset to apply (s)</label>
+                            <input type="number" id="offsetInput" value="0" step="0.01">
+                        </div>
+                    </div>
+
+                    <div class="component-action-row">
+                        <button id="suggestOffsetBtn" class="btn btn-outline-cyan btn-sm" disabled>
+                            Re-suggest Offset
+                        </button>
+                    </div>
+
+                    <div class="plot-hint">
+                        Positive offset shifts the vocal later relative to the instrumental. A suggestion is computed
+                        automatically once both files are loaded &mdash; adjust it manually if needed.
+                    </div>
+                </div>
+
+                <div class="mask-actions">
+                    <button id="mixBtn" class="btn btn-primary btn-sm" disabled>
+                        Mix
+                    </button>
+                </div>
+
+                <!-- Mixed result -->
+                <div id="mixResultBlock" class="plot-card" style="display:none;">
+                    <div class="plot-card-head">
+                        <div class="plot-card-title">Mixed result</div>
+                    </div>
+                    <div id="mixedWaveform"></div>
+                    <div class="player-row">
+                        <div class="player-block">
+                            <div class="player-block-label">Mixed audio</div>
+                            <audio id="mixedPlayer" controls></audio>
+                        </div>
+                    </div>
+                    <div class="component-action-row">
+                        <a id="mixedDownloadLink" class="btn btn-ghost btn-sm" download="mixed.wav">
+                            Download
+                        </a>
+                    </div>
+                </div>
+
+            </div>
+
+        </main>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/music-lab.js"></script>
+</body>
+
+</html>
