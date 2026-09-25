@@ -28,6 +28,53 @@
 
     <div class="app-layout music-layout">
 
+        <!-- =========================================================
+             SIDEBAR — file summary
+             ========================================================= -->
+        <aside class="sidebar music-sidebar">
+            <div class="sidebar-group">
+                <div class="sidebar-title">Music Lab</div>
+            </div>
+
+            <!-- Separate tab summary -->
+            <div id="sidebarSeparate" class="sidebar-block music-sidebar-section">
+                <div class="sidebar-title">Separate</div>
+                <div class="music-sidebar-row">
+                    <span class="music-sidebar-label">Input</span>
+                    <span id="sbSeparateInput" class="music-sidebar-value">—</span>
+                </div>
+                <div id="sbSeparateResults" style="display:none;">
+                    <div class="music-sidebar-row">
+                        <span class="music-sidebar-label">Vocal</span>
+                        <span id="sbSeparateVocal" class="music-sidebar-value music-sidebar-mono">—</span>
+                    </div>
+                    <div class="music-sidebar-row">
+                        <span class="music-sidebar-label">Instrumental</span>
+                        <span id="sbSeparateInst" class="music-sidebar-value music-sidebar-mono">—</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mix tab summary -->
+            <div id="sidebarMix" class="sidebar-block music-sidebar-section">
+                <div class="sidebar-title">Mix</div>
+                <div class="music-sidebar-row">
+                    <span class="music-sidebar-label">Instrumental</span>
+                    <span id="sbMixInst" class="music-sidebar-value music-sidebar-mono">—</span>
+                </div>
+                <div class="music-sidebar-row">
+                    <span class="music-sidebar-label">Vocal</span>
+                    <span id="sbMixVocal" class="music-sidebar-value music-sidebar-mono">—</span>
+                </div>
+                <div id="sbMixResultRow" style="display:none;">
+                    <div class="music-sidebar-row">
+                        <span class="music-sidebar-label">Mixed</span>
+                        <span id="sbMixResult" class="music-sidebar-value music-sidebar-mono">—</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
         <main class="content music-content">
 
             <!-- TOP-LEVEL TABS: Separate / Mix -->
@@ -85,10 +132,10 @@
                     </div>
                 </div>
 
-                <!-- Vocal + Instrumental results -->
-                <div id="separateResultsGrid" class="music-stems-grid" style="display:none;">
+                <!-- Vocal — vertical stack -->
+                <div id="separateResultsStack" class="music-stems-stack" style="display:none;">
 
-                    <div class="music-stem-column">
+                    <div class="music-stem-row">
                         <div class="plot-card">
                             <div class="plot-card-head">
                                 <div class="plot-card-title">Vocal</div>
@@ -112,7 +159,7 @@
                         </div>
                     </div>
 
-                    <div class="music-stem-column">
+                    <div class="music-stem-row">
                         <div class="plot-card">
                             <div class="plot-card-head">
                                 <div class="plot-card-title">Instrumental</div>

@@ -1234,18 +1234,83 @@ audio { width: 100%; height: 36px; }
    MUSIC LAB
    ========================================================= */
 
-.music-stems-grid,
+/* ---- layout: sidebar + main content ---- */
+
+.music-layout {
+    display: flex;
+    min-height: calc(100vh - var(--header-h));
+}
+
+.music-sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 22px 16px;
+    overflow-y: auto;
+}
+
+.music-content {
+    flex: 1;
+    min-width: 0;
+    padding: 36px 40px;
+}
+
+/* ---- sidebar file summary ---- */
+
+.music-sidebar-section {
+    margin-bottom: 18px;
+}
+
+.music-sidebar-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 8px;
+}
+
+.music-sidebar-label {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-dim);
+}
+
+.music-sidebar-value {
+    font-size: 0.78rem;
+    color: var(--text);
+    word-break: break-all;
+}
+
+.music-sidebar-mono {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--amber);
+}
+
+/* ---- Separate tab: vertical stem stack ---- */
+
+.music-stems-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+}
+
+.music-stem-row {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+/* ---- Mix tab: 2-column input grid ---- */
+
 .music-mixer-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 20px;
     width: 100%;
-}
-
-.music-stem-column {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
 }
 
 .upload-dropzone-sm {
@@ -1256,9 +1321,20 @@ audio { width: 100%; height: 36px; }
     grid-template-columns: repeat(2, 1fr);
 }
 
+/* ---- responsive ---- */
+
 @media (max-width: 900px) {
-    .music-stems-grid,
+    .music-sidebar {
+        display: none;
+    }
+
     .music-mixer-grid {
         grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 700px) {
+    .music-content {
+        padding: 20px 16px;
     }
 }

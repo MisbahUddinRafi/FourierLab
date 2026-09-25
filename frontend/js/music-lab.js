@@ -14,6 +14,30 @@ const state = {
     lastMixResult: null,
 };
 
+/*
+ * Playback cursor state — mirrors audio-lab.js pattern exactly.
+ * Each Music Lab plot that has a time axis gets a live cursor
+ * drawn via Plotly shapes whenever a player is active.
+ */
+const playbackState = {
+    activePlayer: null,
+    animationFrame: null,
+};
+
+/*
+ * All Plotly plot IDs in Music Lab that carry a time (x) axis
+ * and should receive the playback cursor.
+ */
+const MUSIC_PLOT_IDS = [
+    "separateOriginalWaveform",
+    "separateOriginalSpectrogram",
+    "vocalWaveform",
+    "vocalSpectrogram",
+    "instrumentalWaveform",
+    "instrumentalSpectrogram",
+    "mixedWaveform",
+];
+
 function el(id) { return document.getElementById(id); }
 
 /* =========================================================
@@ -72,7 +96,157 @@ async function uploadAudioFile(file) {
 }
 
 /* =========================================================
-   plotting (lightweight, non-interactive — view only)
+   Playback cursor — ported from audio-lab.js
+   ========================================================= */
+
+/*
+ * Update the cursor (vertical line + progress shading) on a
+ * single Plotly plot.  Identical logic to audio-lab.js
+ * updatePlotPlayback(), but reads duration from the Music Lab
+ * player's own .duration attribute so the two labs are fully
+ * independent.
+ */
+function updatePlotPlayback(plotId, currentTime) {
+    const plot = el(plotId);
+
+    if (!plot || !plot.data || !plot.layout) {
+        return;
+    }
+
+    const duration = playbackState.activePlayer?.duration;
+
+    if (!duration || !Number.isFinite(duration) || duration <= 0) {
+        return;
+    }
+
+    const xaxis = plot.layout.xaxis;
+    if (!xaxis) return;
+
+    const range = xaxis.range;
+    if (!range || range.length < 2) return;
+
+    const xMin = range[0];
+    const xMax = range[1];
+
+    const x = Math.max(xMin, Math.min(currentTime, xMax));
+
+    const shapes = plot.layout.shapes || [];
+
+    // Keep any non-playback shapes (none expected in Music Lab
+    // plots, but safe to preserve them).
+    const persistentShapes = shapes.filter(
+        (shape) =>
+            shape.name !== "playback-cursor" &&
+            shape.name !== "playback-progress"
+    );
+
+    const playbackShapes = [
+        {
+            name: "playback-progress",
+            type: "rect",
+            xref: "x",
+            yref: "paper",
+            x0: xMin,
+            x1: x,
+            y0: 0,
+            y1: 1,
+            fillcolor: "rgba(120, 130, 145, 0.10)",
+            line: { width: 0 },
+            layer: "below",
+        },
+        {
+            name: "playback-cursor",
+            type: "line",
+            xref: "x",
+            yref: "paper",
+            x0: x,
+            x1: x,
+            y0: 0,
+            y1: 1,
+            line: { color: "#F5F7FA", width: 2 },
+            layer: "above",
+        },
+    ];
+
+    Plotly.relayout(plot, {
+        shapes: [...persistentShapes, ...playbackShapes],
+    });
+}
+
+/*
+ * rAF loop — runs while a player is active and playing.
+ */
+function updatePlaybackCursor() {
+    const player = playbackState.activePlayer;
+    if (!player) return;
+
+    const currentTime = player.currentTime || 0;
+
+    MUSIC_PLOT_IDS.forEach((id) => updatePlotPlayback(id, currentTime));
+
+    if (!player.paused && !player.ended) {
+        playbackState.animationFrame = requestAnimationFrame(updatePlaybackCursor);
+    } else {
+        playbackState.animationFrame = null;
+    }
+}
+
+/*
+ * Make `player` the active player and kick the cursor loop.
+ */
+function setActivePlaybackPlayer(player) {
+    if (!player) return;
+
+    playbackState.activePlayer = player;
+
+    if (playbackState.animationFrame) {
+        cancelAnimationFrame(playbackState.animationFrame);
+        playbackState.animationFrame = null;
+    }
+
+    updatePlaybackCursor();
+}
+
+/*
+ * Wire all the standard HTML audio events on one player element
+ * so that any interaction (play, seek, pause, …) kicks the cursor.
+ */
+function wirePlaybackPlayer(playerId) {
+    const player = el(playerId);
+    if (!player) return;
+
+    player.addEventListener("play",       () => setActivePlaybackPlayer(player));
+    player.addEventListener("timeupdate", () => setActivePlaybackPlayer(player));
+    player.addEventListener("seeking",    () => setActivePlaybackPlayer(player));
+    player.addEventListener("seeked",     () => setActivePlaybackPlayer(player));
+
+    player.addEventListener("pause", () => {
+        if (playbackState.activePlayer === player) {
+            updatePlaybackCursor();
+        }
+    });
+
+    player.addEventListener("ended", () => {
+        if (playbackState.activePlayer === player) {
+            updatePlaybackCursor();
+        }
+    });
+}
+
+function wireMusicPlaybackTracking() {
+    [
+        "separateOriginalPlayer",
+        "vocalPlayer",
+        "instrumentalPlayer",
+        "mixInstrumentalPlayer",
+        "mixVocalPlayer",
+        "mixedPlayer",
+    ].forEach(wirePlaybackPlayer);
+}
+
+/* =========================================================
+   Plotting — waveform & spectrogram
+   (Cursor is injected after each plot is created.)
    ========================================================= */
 
 const MAGNITUDE_COLORSCALE = "Viridis";
@@ -92,9 +266,13 @@ function baseLayout(extra = {}) {
 }
 
 function renderWaveform(containerId, waveform) {
-    const traceMax = { x: waveform.time, y: waveform.max, mode: "lines", line: { width: 1, color: "#FFB454" }, name: "max" };
+    const traceMax = {
+        x: waveform.time, y: waveform.max,
+        mode: "lines", line: { width: 1, color: "#FFB454" }, name: "max",
+    };
     const traceMin = {
-        x: waveform.time, y: waveform.min, mode: "lines", line: { width: 1, color: "#FFB454" },
+        x: waveform.time, y: waveform.min,
+        mode: "lines", line: { width: 1, color: "#FFB454" },
         fill: "tonexty", fillcolor: "rgba(255,180,84,0.25)", name: "min",
     };
     const layout = baseLayout({
@@ -107,6 +285,11 @@ function renderWaveform(containerId, waveform) {
     Plotly.newPlot(containerId, [traceMax, traceMin], layout, {
         displayModeBar: false,
         responsive: true,
+    }).then(() => {
+        // Inject cursor immediately if a player is already active.
+        if (playbackState.activePlayer) {
+            updatePlotPlayback(containerId, playbackState.activePlayer.currentTime || 0);
+        }
     });
 }
 
@@ -129,7 +312,41 @@ function renderSpectrogram(containerId, freqs, times, magnitude_db) {
     Plotly.newPlot(containerId, [trace], layout, {
         displayModeBar: false,
         responsive: true,
+    }).then(() => {
+        if (playbackState.activePlayer) {
+            updatePlotPlayback(containerId, playbackState.activePlayer.currentTime || 0);
+        }
     });
+}
+
+/* =========================================================
+   Sidebar summary helpers
+   ========================================================= */
+
+function shortName(source) {
+    // source is like "audio/_music_lab/abc123_vocal.wav"
+    // Just show the filename portion.
+    return source ? source.split("/").pop() : "—";
+}
+
+function updateSidebarSeparate() {
+    if (state.separateFile) {
+        el("sbSeparateInput").textContent = state.separateFile.name;
+    }
+    if (state.separateResult) {
+        el("sbSeparateVocal").textContent = shortName(state.separateResult.vocal.source);
+        el("sbSeparateInst").textContent  = shortName(state.separateResult.instrumental.source);
+        el("sbSeparateResults").style.display = "block";
+    }
+}
+
+function updateSidebarMix() {
+    el("sbMixInst").textContent   = state.mixInstrumentalSource ? shortName(state.mixInstrumentalSource) : "—";
+    el("sbMixVocal").textContent  = state.mixVocalSource        ? shortName(state.mixVocalSource)        : "—";
+    if (state.lastMixResult) {
+        el("sbMixResult").textContent        = shortName(state.lastMixResult.mixed.source);
+        el("sbMixResultRow").style.display   = "block";
+    }
 }
 
 /* =========================================================
@@ -218,6 +435,7 @@ function handleSeparateFileSelected(file) {
     label.textContent = "Selected: " + file.name;
     label.style.display = "block";
 
+    updateSidebarSeparate();
     refreshButtonStates();
 }
 
@@ -277,8 +495,10 @@ async function runSeparate() {
         instrumentalPlayer.load();
         el("instrumentalDownloadLink").href = "/media/audio/" + data.instrumental.source;
 
-        el("separateResultsGrid").style.display = "grid";
+        // Show vertical stack (renamed from separateResultsGrid)
+        el("separateResultsStack").style.display = "flex";
 
+        updateSidebarSeparate();
         setStatus("Separation complete.", "success");
     } catch (err) {
         setStatus(err.message, "error");
@@ -321,6 +541,7 @@ function sendToMixer(stem) {
         label.style.display = "block";
     }
 
+    updateSidebarMix();
     switchToplevelTab("tabMix");
     refreshButtonStates();
     maybeSuggestOffset();
@@ -359,6 +580,7 @@ async function handleMixFileSelected(slot, file) {
             label.style.display = "block";
         }
 
+        updateSidebarMix();
         setStatus("");
         maybeSuggestOffset();
     } catch (err) {
@@ -433,6 +655,7 @@ async function runMix() {
         el("mixedDownloadLink").href = "/media/audio/" + data.mixed.source;
         el("mixResultBlock").style.display = "block";
 
+        updateSidebarMix();
         setStatus("Mix complete.", "success");
     } catch (err) {
         setStatus(err.message, "error");
@@ -466,6 +689,9 @@ function wireGainSlider(sliderId, labelId) {
 
 window.addEventListener("DOMContentLoaded", () => {
     initToplevelTabs();
+
+    // Wire all players for playback cursor tracking.
+    wireMusicPlaybackTracking();
 
     wireDropzone("separateUploadInput", "separateDropzone", handleSeparateFileSelected);
     wireDropzone("mixInstrumentalInput", "mixInstrumentalDropzone", (file) => handleMixFileSelected("instrumental", file));
