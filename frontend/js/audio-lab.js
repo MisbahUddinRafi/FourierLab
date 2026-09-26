@@ -43,7 +43,10 @@ function setStatus(message, type = "info") {
 }
 
 function setBusy(busy) {
-    document.querySelectorAll(".btn").forEach((b) => (b.disabled = busy));
+    document.querySelectorAll(".btn").forEach((b) => {
+        if (b.id === "saveModalSaveBtn" || b.id === "saveModalSkipBtn") return;
+        b.disabled = busy;
+    });
 }
 
 function fmt(value, digits = 2, suffix = "") {

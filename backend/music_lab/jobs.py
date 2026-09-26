@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import shutil
 import uuid
+import threading
 
 from . import config
 
@@ -72,3 +73,46 @@ def cleanup_paths(*paths: str) -> None:
 def copy_into_jobs_dir(src_path: str, dest_path: str) -> None:
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     shutil.copy(src_path, dest_path)
+
+
+
+
+
+
+# job_id -> subprocess.Popen handle for any currently-running Demucs job
+_running_processes: dict[str, subprocess.Popen] = {}
+_processes_lock = threading.Lock()
+
+
+def register_process(job_id: str, proc: subprocess.Popen) -> None:
+    with _processes_lock:
+        _running_processes[job_id] = proc
+
+
+def unregister_process(job_id: str) -> None:
+    with _processes_lock:
+        _running_processes.pop(job_id, None)
+
+
+def cancel_job(job_id: str) -> bool:
+    """Returns True if a running process was found and terminated."""
+    with _processes_lock:
+        proc = _running_processes.get(job_id)
+
+    if proc is None:
+        return False
+
+    if proc.poll() is None:  # still running
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    unregister_process(job_id)
+    return True
+
+
+class JobCancelledError(Exception):
+    pass

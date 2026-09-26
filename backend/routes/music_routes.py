@@ -115,6 +115,8 @@ def _build_visualization_dict(y, sr, source: str) -> dict:
 # POST /music/separate
 # ---------------------------------------------------------------
 
+import anyio
+
 @router.post("/separate")
 async def separate(body: SeparateRequest):
     src_path = _resolve_source_path(body.source, "source")
@@ -122,17 +124,18 @@ async def separate(body: SeparateRequest):
     job_id = jobs.new_job_id()
 
     try:
-        demucs_vocal_path, demucs_instrumental_path = separation.run_demucs_two_stems(
-            src_path
+        # Demucs is fully synchronous/CPU-bound; run it in a worker
+        # thread so this coroutine doesn't block the event loop, and
+        # so a cancel request (handled by a different request) can
+        # actually reach jobs.cancel_job() while this is in flight.
+        demucs_vocal_path, demucs_instrumental_path = await anyio.to_thread.run_sync(
+            separation.run_demucs_two_stems, src_path, job_id
         )
 
         final_vocal_path, final_instrumental_path = jobs.separated_output_paths(job_id)
         jobs.copy_into_jobs_dir(demucs_vocal_path, final_vocal_path)
         jobs.copy_into_jobs_dir(demucs_instrumental_path, final_instrumental_path)
 
-        # Original is already on disk (uploaded via /audio/upload) --
-        # no need to re-save it, just load it for visualization and
-        # reuse its existing source path.
         y_original, sr_original = audio_ops.load_audio_stereo(src_path)
         y_vocal, sr_vocal = audio_ops.load_audio_stereo(final_vocal_path)
         y_instrumental, sr_instrumental = audio_ops.load_audio_stereo(final_instrumental_path)
@@ -152,11 +155,20 @@ async def separate(body: SeparateRequest):
             "instrumental": instrumental_viz,
         }
 
+    except jobs.JobCancelledError:
+        raise HTTPException(499, "Separation was cancelled.")
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(500, f"Separation failed: {exc}")
 
+
+@router.post("/separate/{job_id}/cancel")
+async def cancel_separate(job_id: str):
+    cancelled = jobs.cancel_job(job_id)
+    if not cancelled:
+        raise HTTPException(404, f"No running job found for job_id={job_id}")
+    return {"job_id": job_id, "cancelled": True}
 
 # ---------------------------------------------------------------
 # POST /music/suggest-offset

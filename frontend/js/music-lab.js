@@ -5,38 +5,76 @@
 const state = {
     // Separate tab
     separateFile: null,
+    separateSource: null,
     separateResult: null, // { original, vocal, instrumental }
 
     // Mix tab
     mixInstrumentalSource: null,
     mixVocalSource: null,
+    mixInstrumentalGenerated: false,
+    mixVocalGenerated: false,
     suggestedOffset: null,
     lastMixResult: null,
 };
 
-/*
- * Playback cursor state — mirrors audio-lab.js pattern exactly.
- * Each Music Lab plot that has a time axis gets a live cursor
- * drawn via Plotly shapes whenever a player is active.
- */
-const playbackState = {
-    activePlayer: null,
-    animationFrame: null,
+const abortControllers = {
+    separate: null,
+    mix: null,
+    suggestOffset: null,
 };
 
+function setOffsetBusy(busy) {
+    const btn = el("suggestOffsetBtn");
+    if (btn) btn.disabled = busy;
+}
+
+function setMixBusy(busy) {
+    const btn = el("mixBtn");
+    if (btn) btn.disabled = busy;
+}
+
+function toggleCancelButton(btnId, show) {
+    const btn = el(btnId);
+    if (btn) btn.style.display = show ? "inline-block" : "none";
+}
+
 /*
- * All Plotly plot IDs in Music Lab that carry a time (x) axis
- * and should receive the playback cursor.
+ * Each player is tracked independently: its own plot IDs,
+ * its own animation frame handle. No shared "activePlayer".
  */
-const MUSIC_PLOT_IDS = [
-    "separateOriginalWaveform",
-    "separateOriginalSpectrogram",
-    "vocalWaveform",
-    "vocalSpectrogram",
-    "instrumentalWaveform",
-    "instrumentalSpectrogram",
-    "mixedWaveform",
-];
+const PLAYER_PLOT_MAP = {
+    separateOriginalPlayer: ["separateOriginalWaveform", "separateOriginalSpectrogram"],
+    vocalPlayer: ["vocalWaveform", "vocalSpectrogram"],
+    instrumentalPlayer: ["instrumentalWaveform", "instrumentalSpectrogram"],
+    mixInstrumentalPlayer: ["mixInstrumentalWaveform", "mixInstrumentalSpectrogram"],
+    mixVocalPlayer: ["mixVocalWaveform", "mixVocalSpectrogram"],
+    mixedPlayer: ["mixedWaveform", "mixedSpectrogram"],
+};
+
+function drawCursorIfOwnerActive(plotId) {
+    const ownerId = Object.keys(PLAYER_PLOT_MAP).find((pid) =>
+        PLAYER_PLOT_MAP[pid].includes(plotId)
+    );
+    if (!ownerId) return;
+
+    const player = el(ownerId);
+    if (player && player.currentTime > 0) {
+        updatePlotPlayback(plotId, player.currentTime, player.duration);
+    }
+}
+
+/*
+ * playbackState[playerId] = { animationFrame }
+ * Populated lazily as players start playing/seeking.
+ */
+const playbackState = {};
+
+function getPlaybackEntry(playerId) {
+    if (!playbackState[playerId]) {
+        playbackState[playerId] = { animationFrame: null };
+    }
+    return playbackState[playerId];
+}
 
 function el(id) { return document.getElementById(id); }
 
@@ -44,8 +82,9 @@ function el(id) { return document.getElementById(id); }
    status / busy helpers
    ========================================================= */
 
-function setStatus(message, type = "info") {
-    const box = el("statusBox");
+function setStatus(message, type = "info", tab = "separate") {
+    const boxId = tab === "mix" ? "statusBoxMix" : "statusBoxSeparate";
+    const box = el(boxId);
     if (!box) return;
     box.textContent = message;
     box.className = "status-msg" + (type === "error" ? " status-error" : type === "success" ? " status-success" : "");
@@ -53,7 +92,10 @@ function setStatus(message, type = "info") {
 }
 
 function setBusy(busy) {
-    document.querySelectorAll(".btn").forEach((b) => (b.disabled = busy));
+    document.querySelectorAll(".btn").forEach((b) => {
+        if (b.id === "cancelSeparateBtn" || b.id === "cancelMixBtn" || b.id === "cancelSuggestOffsetBtn") return;
+        b.disabled = busy;
+    });
 }
 
 /*
@@ -63,7 +105,7 @@ function setBusy(busy) {
  * stems are loaded) incorrectly enabled.
  */
 function refreshButtonStates() {
-    el("separateBtn").disabled = !state.separateFile;
+    el("separateBtn").disabled = !state.separateFile && !state.separateSource;
 
     const bothLoaded = !!(state.mixInstrumentalSource && state.mixVocalSource);
 
@@ -72,14 +114,15 @@ function refreshButtonStates() {
 }
 
 /* =========================================================
-   API helpers
+   API helpers & Library loading
    ========================================================= */
 
-async function apiPost_json(path, body) {
+async function apiPost_json(path, body, signal) {
     const res = await fetch(API_BASE + path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal,
     });
     if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
@@ -95,25 +138,109 @@ async function uploadAudioFile(file) {
     return res.source;
 }
 
+async function refreshMusicLibrary() {
+    try {
+        const data = await apiGet("/audio/library");
+        const options = ['<option value="">-- Select from library --</option>']
+            .concat(data.samples.map((f) => `<option value="${f}">${f}</option>`))
+            .join("");
+
+        ["separateLibrarySelect", "mixInstrumentalLibrarySelect", "mixVocalLibrarySelect"].forEach((id) => {
+            const select = el(id);
+            if (select) select.innerHTML = options;
+        });
+    } catch (err) {
+        console.error("Failed to load music library:", err);
+    }
+}
+
+async function handleLibrarySelect(slot, filename) {
+    if (!filename) return;
+    const source = "samples/" + filename;
+
+    if (slot === "separate") {
+        state.separateFile = null;
+        state.separateSource = source;
+
+        const label = el("separateSelectedFileName");
+        if (label) {
+            label.textContent = "Selected: " + filename;
+            label.style.display = "block";
+        }
+
+        updateSidebarSeparate();
+        refreshButtonStates();
+    } else if (slot === "instrumental") {
+        state.mixInstrumentalSource = source;
+        state.mixInstrumentalGenerated = false;
+
+        const player = el("mixInstrumentalPlayer");
+        if (player) {
+            player.src = "/media/audio/" + source;
+            player.load();
+        }
+
+        const label = el("mixInstrumentalFileName");
+        if (label) {
+            label.textContent = "Selected: " + filename;
+            label.style.display = "block";
+        }
+
+        updateSidebarMix();
+        refreshButtonStates();
+        await renderMixSlotVisuals("instrumental", source);
+    } else if (slot === "vocal") {
+        state.mixVocalSource = source;
+        state.mixVocalGenerated = false;
+
+        const player = el("mixVocalPlayer");
+        if (player) {
+            player.src = "/media/audio/" + source;
+            player.load();
+        }
+
+        const label = el("mixVocalFileName");
+        if (label) {
+            label.textContent = "Selected: " + filename;
+            label.style.display = "block";
+        }
+
+        updateSidebarMix();
+        refreshButtonStates();
+        await renderMixSlotVisuals("vocal", source);
+    }
+}
+
+async function renderMixSlotVisuals(slot, source) {
+    try {
+        const data = await apiPost_json("/audio/analyze", {
+            source, sr: 22050, n_fft: 2048, hop_length: 512,
+        });
+        const wfId = slot === "instrumental" ? "mixInstrumentalWaveform" : "mixVocalWaveform";
+        const specId = slot === "instrumental" ? "mixInstrumentalSpectrogram" : "mixVocalSpectrogram";
+        renderWaveform(wfId, data.waveform);
+        renderSpectrogram(specId, data.freqs, data.times, data.magnitude_db);
+    } catch (err) {
+        console.error("Visualization failed:", err);
+    }
+}
+
 /* =========================================================
-   Playback cursor — ported from audio-lab.js
+   Playback cursor
    ========================================================= */
 
 /*
  * Update the cursor (vertical line + progress shading) on a
- * single Plotly plot.  Identical logic to audio-lab.js
- * updatePlotPlayback(), but reads duration from the Music Lab
- * player's own .duration attribute so the two labs are fully
- * independent.
+ * single Plotly plot. Duration is now passed in explicitly by
+ * the caller (read from that plot's OWN owning player), instead
+ * of relying on a removed global `playbackState.activePlayer`.
  */
-function updatePlotPlayback(plotId, currentTime) {
+function updatePlotPlayback(plotId, currentTime, duration) {
     const plot = el(plotId);
 
     if (!plot || !plot.data || !plot.layout) {
         return;
     }
-
-    const duration = playbackState.activePlayer?.duration;
 
     if (!duration || !Number.isFinite(duration) || duration <= 0) {
         return;
@@ -132,8 +259,6 @@ function updatePlotPlayback(plotId, currentTime) {
 
     const shapes = plot.layout.shapes || [];
 
-    // Keep any non-playback shapes (none expected in Music Lab
-    // plots, but safe to preserve them).
     const persistentShapes = shapes.filter(
         (shape) =>
             shape.name !== "playback-cursor" &&
@@ -175,62 +300,50 @@ function updatePlotPlayback(plotId, currentTime) {
 
 /*
  * rAF loop — runs while a player is active and playing.
+ * Reads duration from THIS player only (fixes the bug where
+ * updatePlotPlayback referenced a removed global player).
  */
-function updatePlaybackCursor() {
-    const player = playbackState.activePlayer;
+function updatePlaybackCursor(playerId) {
+    const player = el(playerId);
     if (!player) return;
+
+    const entry = getPlaybackEntry(playerId);
+    const plotIds = PLAYER_PLOT_MAP[playerId] || [];
 
     const currentTime = player.currentTime || 0;
+    const duration = player.duration;
 
-    MUSIC_PLOT_IDS.forEach((id) => updatePlotPlayback(id, currentTime));
+    plotIds.forEach((id) => updatePlotPlayback(id, currentTime, duration));
 
     if (!player.paused && !player.ended) {
-        playbackState.animationFrame = requestAnimationFrame(updatePlaybackCursor);
+        entry.animationFrame = requestAnimationFrame(() => updatePlaybackCursor(playerId));
     } else {
-        playbackState.animationFrame = null;
+        entry.animationFrame = null;
     }
 }
 
-/*
- * Make `player` the active player and kick the cursor loop.
- */
-function setActivePlaybackPlayer(player) {
-    if (!player) return;
+function startPlaybackTracking(playerId) {
+    const entry = getPlaybackEntry(playerId);
 
-    playbackState.activePlayer = player;
-
-    if (playbackState.animationFrame) {
-        cancelAnimationFrame(playbackState.animationFrame);
-        playbackState.animationFrame = null;
+    if (entry.animationFrame) {
+        cancelAnimationFrame(entry.animationFrame);
+        entry.animationFrame = null;
     }
 
-    updatePlaybackCursor();
+    updatePlaybackCursor(playerId);
 }
 
-/*
- * Wire all the standard HTML audio events on one player element
- * so that any interaction (play, seek, pause, …) kicks the cursor.
- */
 function wirePlaybackPlayer(playerId) {
     const player = el(playerId);
     if (!player) return;
 
-    player.addEventListener("play",       () => setActivePlaybackPlayer(player));
-    player.addEventListener("timeupdate", () => setActivePlaybackPlayer(player));
-    player.addEventListener("seeking",    () => setActivePlaybackPlayer(player));
-    player.addEventListener("seeked",     () => setActivePlaybackPlayer(player));
+    player.addEventListener("play", () => startPlaybackTracking(playerId));
+    player.addEventListener("timeupdate", () => startPlaybackTracking(playerId));
+    player.addEventListener("seeking", () => startPlaybackTracking(playerId));
+    player.addEventListener("seeked", () => startPlaybackTracking(playerId));
 
-    player.addEventListener("pause", () => {
-        if (playbackState.activePlayer === player) {
-            updatePlaybackCursor();
-        }
-    });
-
-    player.addEventListener("ended", () => {
-        if (playbackState.activePlayer === player) {
-            updatePlaybackCursor();
-        }
-    });
+    player.addEventListener("pause", () => updatePlaybackCursor(playerId));
+    player.addEventListener("ended", () => updatePlaybackCursor(playerId));
 }
 
 function wireMusicPlaybackTracking() {
@@ -246,7 +359,6 @@ function wireMusicPlaybackTracking() {
 
 /* =========================================================
    Plotting — waveform & spectrogram
-   (Cursor is injected after each plot is created.)
    ========================================================= */
 
 const MAGNITUDE_COLORSCALE = "Viridis";
@@ -286,10 +398,7 @@ function renderWaveform(containerId, waveform) {
         displayModeBar: false,
         responsive: true,
     }).then(() => {
-        // Inject cursor immediately if a player is already active.
-        if (playbackState.activePlayer) {
-            updatePlotPlayback(containerId, playbackState.activePlayer.currentTime || 0);
-        }
+        drawCursorIfOwnerActive(containerId);
     });
 }
 
@@ -313,9 +422,7 @@ function renderSpectrogram(containerId, freqs, times, magnitude_db) {
         displayModeBar: false,
         responsive: true,
     }).then(() => {
-        if (playbackState.activePlayer) {
-            updatePlotPlayback(containerId, playbackState.activePlayer.currentTime || 0);
-        }
+        drawCursorIfOwnerActive(containerId);
     });
 }
 
@@ -324,28 +431,28 @@ function renderSpectrogram(containerId, freqs, times, magnitude_db) {
    ========================================================= */
 
 function shortName(source) {
-    // source is like "audio/_music_lab/abc123_vocal.wav"
-    // Just show the filename portion.
     return source ? source.split("/").pop() : "—";
 }
 
 function updateSidebarSeparate() {
     if (state.separateFile) {
         el("sbSeparateInput").textContent = state.separateFile.name;
+    } else if (state.separateSource) {
+        el("sbSeparateInput").textContent = shortName(state.separateSource);
     }
     if (state.separateResult) {
         el("sbSeparateVocal").textContent = shortName(state.separateResult.vocal.source);
-        el("sbSeparateInst").textContent  = shortName(state.separateResult.instrumental.source);
+        el("sbSeparateInst").textContent = shortName(state.separateResult.instrumental.source);
         el("sbSeparateResults").style.display = "block";
     }
 }
 
 function updateSidebarMix() {
-    el("sbMixInst").textContent   = state.mixInstrumentalSource ? shortName(state.mixInstrumentalSource) : "—";
-    el("sbMixVocal").textContent  = state.mixVocalSource        ? shortName(state.mixVocalSource)        : "—";
+    el("sbMixInst").textContent = state.mixInstrumentalSource ? shortName(state.mixInstrumentalSource) : "—";
+    el("sbMixVocal").textContent = state.mixVocalSource ? shortName(state.mixVocalSource) : "—";
     if (state.lastMixResult) {
-        el("sbMixResult").textContent        = shortName(state.lastMixResult.mixed.source);
-        el("sbMixResultRow").style.display   = "block";
+        el("sbMixResult").textContent = shortName(state.lastMixResult.mixed.source);
+        el("sbMixResultRow").style.display = "block";
     }
 }
 
@@ -366,6 +473,24 @@ function switchToplevelTab(targetId) {
     document.querySelectorAll(".lab-panel").forEach((p) => {
         p.classList.toggle("active", p.id === targetId);
     });
+
+    // Plotly sizes plots based on their container's dimensions at
+    // render time. Plots rendered while their tab was inactive
+    // (display:none) can end up with zero width/height. Force a
+    // resize on every plot once its tab becomes visible again.
+    if (targetId === "tabSeparate") {
+        ["separateOriginalWaveform", "separateOriginalSpectrogram", "vocalWaveform", "vocalSpectrogram", "instrumentalWaveform", "instrumentalSpectrogram"]
+            .forEach((id) => {
+                const plot = el(id);
+                if (plot && plot.data) Plotly.Plots.resize(plot);
+            });
+    } else if (targetId === "tabMix") {
+        ["mixInstrumentalWaveform", "mixInstrumentalSpectrogram", "mixVocalWaveform", "mixVocalSpectrogram", "mixedWaveform", "mixedSpectrogram"]
+            .forEach((id) => {
+                const plot = el(id);
+                if (plot && plot.data) Plotly.Plots.resize(plot);
+            });
+    }
 }
 
 /* =========================================================
@@ -415,7 +540,6 @@ function wireDropzone(inputId, dropzoneId, onFileSelected) {
 
         const file = files[0];
 
-        // Keep the underlying <input> in sync, mirroring Audio Lab's pattern.
         const dataTransfer = new DataTransfer();
         dataTransfer.items.add(file);
         input.files = dataTransfer.files;
@@ -424,86 +548,144 @@ function wireDropzone(inputId, dropzoneId, onFileSelected) {
     });
 }
 
+function cancelSeparate() {
+    if (abortControllers.separate) {
+        abortControllers.separate.abort();
+    }
+}
+
+function cancelMix() {
+    if (abortControllers.mix) {
+        abortControllers.mix.abort();
+    }
+}
+
+function cancelSuggestOffset() {
+    if (abortControllers.suggestOffset) {
+        abortControllers.suggestOffset.abort();
+    }
+}
+
 /* =========================================================
    Tab 1 — Separate
    ========================================================= */
 
 function handleSeparateFileSelected(file) {
     state.separateFile = file;
+    state.separateSource = null;
 
     const label = el("separateSelectedFileName");
-    label.textContent = "Selected: " + file.name;
-    label.style.display = "block";
+    if (label) {
+        label.textContent = "Selected: " + file.name;
+        label.style.display = "block";
+    }
 
     updateSidebarSeparate();
     refreshButtonStates();
 }
 
+/*
+ * Renders (or re-renders) the Separate tab's main-stage results
+ * from state.separateResult. Pulled out into its own function so
+ * it can run both right after a fresh /music/separate response,
+ * AND whenever the user returns to a tab where results should
+ * already be showing but the plots need to be (re)painted.
+ */
+function renderSeparateResults() {
+    const data = state.separateResult;
+    if (!data) return;
+
+    // Original
+    renderWaveform("separateOriginalWaveform", data.original.waveform);
+    renderSpectrogram(
+        "separateOriginalSpectrogram",
+        data.original.spectrogram.freq,
+        data.original.spectrogram.time,
+        data.original.spectrogram.z
+    );
+    const originalPlayer = el("separateOriginalPlayer");
+    if (originalPlayer) {
+        originalPlayer.src = "/media/audio/" + data.original.source;
+        originalPlayer.load();
+    }
+    el("separateOriginalBlock").style.display = "block";
+
+    // Vocal
+    renderWaveform("vocalWaveform", data.vocal.waveform);
+    renderSpectrogram(
+        "vocalSpectrogram",
+        data.vocal.spectrogram.freq,
+        data.vocal.spectrogram.time,
+        data.vocal.spectrogram.z
+    );
+    const vocalPlayer = el("vocalPlayer");
+    if (vocalPlayer) {
+        vocalPlayer.src = "/media/audio/" + data.vocal.source;
+        vocalPlayer.load();
+    }
+    const vocalDownload = el("vocalDownloadLink");
+    if (vocalDownload) vocalDownload.href = "/media/audio/" + data.vocal.source;
+
+    // Instrumental
+    renderWaveform("instrumentalWaveform", data.instrumental.waveform);
+    renderSpectrogram(
+        "instrumentalSpectrogram",
+        data.instrumental.spectrogram.freq,
+        data.instrumental.spectrogram.time,
+        data.instrumental.spectrogram.z
+    );
+    const instrumentalPlayer = el("instrumentalPlayer");
+    if (instrumentalPlayer) {
+        instrumentalPlayer.src = "/media/audio/" + data.instrumental.source;
+        instrumentalPlayer.load();
+    }
+    const instrumentalDownload = el("instrumentalDownloadLink");
+    if (instrumentalDownload) instrumentalDownload.href = "/media/audio/" + data.instrumental.source;
+
+    // Show vertical stack
+    el("separateResultsStack").style.display = "flex";
+}
+
 async function runSeparate() {
-    if (!state.separateFile) {
+    if (!state.separateFile && !state.separateSource) {
         setStatus("Choose an audio file first.", "error");
         return;
     }
 
+    const controller = new AbortController();
+    abortControllers.separate = controller;
+
     try {
         setBusy(true);
-        setStatus("Uploading...");
+        toggleCancelButton("cancelSeparateBtn", true);
 
-        const source = await uploadAudioFile(state.separateFile);
+        let source;
+        if (state.separateFile) {
+            setStatus("Uploading...");
+            source = await uploadAudioFile(state.separateFile);
+        } else {
+            source = state.separateSource;
+        }
 
         setStatus("Separating vocals and instrumental — this can take a while...");
 
-        const data = await apiPost_json("/music/separate", { source });
+        const data = await apiPost_json("/music/separate", { source }, controller.signal);
         state.separateResult = data;
 
-        // Original
-        renderWaveform("separateOriginalWaveform", data.original.waveform);
-        renderSpectrogram(
-            "separateOriginalSpectrogram",
-            data.original.spectrogram.freq,
-            data.original.spectrogram.time,
-            data.original.spectrogram.z
-        );
-        const originalPlayer = el("separateOriginalPlayer");
-        originalPlayer.src = "/media/audio/" + data.original.source;
-        originalPlayer.load();
-        el("separateOriginalBlock").style.display = "block";
-
-        // Vocal
-        renderWaveform("vocalWaveform", data.vocal.waveform);
-        renderSpectrogram(
-            "vocalSpectrogram",
-            data.vocal.spectrogram.freq,
-            data.vocal.spectrogram.time,
-            data.vocal.spectrogram.z
-        );
-        const vocalPlayer = el("vocalPlayer");
-        vocalPlayer.src = "/media/audio/" + data.vocal.source;
-        vocalPlayer.load();
-        el("vocalDownloadLink").href = "/media/audio/" + data.vocal.source;
-
-        // Instrumental
-        renderWaveform("instrumentalWaveform", data.instrumental.waveform);
-        renderSpectrogram(
-            "instrumentalSpectrogram",
-            data.instrumental.spectrogram.freq,
-            data.instrumental.spectrogram.time,
-            data.instrumental.spectrogram.z
-        );
-        const instrumentalPlayer = el("instrumentalPlayer");
-        instrumentalPlayer.src = "/media/audio/" + data.instrumental.source;
-        instrumentalPlayer.load();
-        el("instrumentalDownloadLink").href = "/media/audio/" + data.instrumental.source;
-
-        // Show vertical stack (renamed from separateResultsGrid)
-        el("separateResultsStack").style.display = "flex";
+        renderSeparateResults();
 
         updateSidebarSeparate();
         setStatus("Separation complete.", "success");
     } catch (err) {
-        setStatus(err.message, "error");
+        if (err.name === "AbortError") {
+            setStatus("Separation cancelled.", "info");
+        } else {
+            setStatus(err.message, "error");
+        }
     } finally {
         setBusy(false);
+        toggleCancelButton("cancelSeparateBtn", false);
+        abortControllers.separate = null;
         refreshButtonStates();
     }
 }
@@ -521,30 +703,40 @@ function sendToMixer(stem) {
 
     if (stem === "vocal") {
         state.mixVocalSource = stemData.source;
+        state.mixVocalGenerated = true;
 
         const player = el("mixVocalPlayer");
-        player.src = "/media/audio/" + stemData.source;
-        player.load();
+        if (player) {
+            player.src = "/media/audio/" + stemData.source;
+            player.load();
+        }
 
         const label = el("mixVocalFileName");
-        label.textContent = "From Separate tab: " + stemData.source;
-        label.style.display = "block";
+        if (label) {
+            label.textContent = "From Separate tab: " + shortName(stemData.source);
+            label.style.display = "block";
+        }
     } else {
         state.mixInstrumentalSource = stemData.source;
+        state.mixInstrumentalGenerated = true;
 
         const player = el("mixInstrumentalPlayer");
-        player.src = "/media/audio/" + stemData.source;
-        player.load();
+        if (player) {
+            player.src = "/media/audio/" + stemData.source;
+            player.load();
+        }
 
         const label = el("mixInstrumentalFileName");
-        label.textContent = "From Separate tab: " + stemData.source;
-        label.style.display = "block";
+        if (label) {
+            label.textContent = "From Separate tab: " + shortName(stemData.source);
+            label.style.display = "block";
+        }
     }
 
     updateSidebarMix();
     switchToplevelTab("tabMix");
     refreshButtonStates();
-    maybeSuggestOffset();
+    renderMixSlotVisuals(stem, stemData.source);
 }
 
 /* =========================================================
@@ -554,86 +746,108 @@ function sendToMixer(stem) {
 async function handleMixFileSelected(slot, file) {
     try {
         setBusy(true);
-        setStatus("Uploading " + slot + "...");
+        setStatus("Uploading " + slot + "...", "mix");
 
         const source = await uploadAudioFile(file);
 
         if (slot === "instrumental") {
             state.mixInstrumentalSource = source;
+            state.mixInstrumentalGenerated = false;
 
             const player = el("mixInstrumentalPlayer");
-            player.src = "/media/audio/" + source;
-            player.load();
+            if (player) {
+                player.src = "/media/audio/" + source;
+                player.load();
+            }
 
             const label = el("mixInstrumentalFileName");
-            label.textContent = "Selected: " + file.name;
-            label.style.display = "block";
+            if (label) {
+                label.textContent = "Selected: " + file.name;
+                label.style.display = "block";
+            }
         } else {
             state.mixVocalSource = source;
+            state.mixVocalGenerated = false;
 
             const player = el("mixVocalPlayer");
-            player.src = "/media/audio/" + source;
-            player.load();
+            if (player) {
+                player.src = "/media/audio/" + source;
+                player.load();
+            }
 
             const label = el("mixVocalFileName");
-            label.textContent = "Selected: " + file.name;
-            label.style.display = "block";
+            if (label) {
+                label.textContent = "Selected: " + file.name;
+                label.style.display = "block";
+            }
         }
 
         updateSidebarMix();
-        setStatus("");
-        maybeSuggestOffset();
+        setStatus("", "info", "mix");
+        await renderMixSlotVisuals(slot, source);
     } catch (err) {
-        setStatus(err.message, "error");
+        setStatus(err.message, "error", "mix");
     } finally {
         setBusy(false);
         refreshButtonStates();
     }
 }
 
-function maybeSuggestOffset() {
-    if (!state.mixInstrumentalSource || !state.mixVocalSource) return;
-    runSuggestOffset();
-}
-
 async function runSuggestOffset() {
     if (!state.mixInstrumentalSource || !state.mixVocalSource) {
-        setStatus("Load both an instrumental and a vocal first.", "error");
+        setStatus("Load both an instrumental and a vocal first.", "error", "mix");
         return;
     }
 
-    try {
-        setBusy(true);
-        setStatus("Computing suggested offset...");
+    const controller = new AbortController();
+    abortControllers.suggestOffset = controller;
 
-        const data = await apiPost_json("/music/suggest-offset", {
-            instrumental_source: state.mixInstrumentalSource,
-            vocal_source: state.mixVocalSource,
-        });
+    try {
+        setOffsetBusy(true);
+        toggleCancelButton("cancelSuggestOffsetBtn", true);
+        setStatus("Computing suggested offset...", "", "mix");
+
+        const data = await apiPost_json(
+            "/music/suggest-offset",
+            {
+                instrumental_source: state.mixInstrumentalSource,
+                vocal_source: state.mixVocalSource,
+            },
+            controller.signal
+        );
 
         state.suggestedOffset = data.suggested_offset_sec;
 
         el("suggestedOffsetReadout").textContent = data.suggested_offset_sec.toFixed(3) + " s";
         el("offsetInput").value = data.suggested_offset_sec.toFixed(3);
 
-        setStatus("Suggested offset computed.", "success");
+        setStatus("Suggested offset computed.", "success", "mix");
     } catch (err) {
-        setStatus(err.message, "error");
+        if (err.name === "AbortError") {
+            setStatus("Offset suggestion cancelled.", "info", "mix");
+        } else {
+            setStatus(err.message, "error", "mix");
+        }
     } finally {
-        setBusy(false);
-        refreshButtonStates();
+        setOffsetBusy(false);
+        toggleCancelButton("cancelSuggestOffsetBtn", false);
+        abortControllers.suggestOffset = null;
     }
 }
 
 async function runMix() {
     if (!state.mixInstrumentalSource || !state.mixVocalSource) {
-        setStatus("Load both an instrumental and a vocal first.", "error");
+        setStatus("Load both an instrumental and a vocal first.", "error", "mix");
         return;
     }
 
+    const controller = new AbortController();
+    abortControllers.mix = controller;
+
     try {
-        setBusy(true);
-        setStatus("Mixing...");
+        setMixBusy(true);
+        toggleCancelButton("cancelMixBtn", true);
+        setStatus("Mixing...", "", "mix");
 
         const req = {
             instrumental_source: state.mixInstrumentalSource,
@@ -643,25 +857,45 @@ async function runMix() {
             offset_sec: parseFloat(el("offsetInput").value) || 0,
         };
 
-        const data = await apiPost_json("/music/mix", req);
+        const data = await apiPost_json("/music/mix", req, controller.signal);
         state.lastMixResult = data;
 
         renderWaveform("mixedWaveform", data.mixed.waveform);
+        renderSpectrogram(
+            "mixedSpectrogram",
+            data.mixed.spectrogram.freq,
+            data.mixed.spectrogram.time,
+            data.mixed.spectrogram.z
+        );
 
         const mixedPlayer = el("mixedPlayer");
-        mixedPlayer.src = "/media/audio/" + data.mixed.source;
-        mixedPlayer.load();
+        if (mixedPlayer) {
+            mixedPlayer.src = "/media/audio/" + data.mixed.source;
+            mixedPlayer.load();
+        }
 
-        el("mixedDownloadLink").href = "/media/audio/" + data.mixed.source;
-        el("mixResultBlock").style.display = "block";
+        const downloadLink = el("mixedDownloadLink");
+        if (downloadLink) {
+            downloadLink.href = "/media/audio/" + data.mixed.source;
+        }
+
+        const mixResultBlock = el("mixResultBlock");
+        if (mixResultBlock) {
+            mixResultBlock.style.display = "block";
+        }
 
         updateSidebarMix();
-        setStatus("Mix complete.", "success");
+        setStatus("Mix complete.", "success", "mix");
     } catch (err) {
-        setStatus(err.message, "error");
+        if (err.name === "AbortError") {
+            setStatus("Mix cancelled.", "info", "mix");
+        } else {
+            setStatus(err.message, "error", "mix");
+        }
     } finally {
-        setBusy(false);
-        refreshButtonStates();
+        setMixBusy(false);
+        toggleCancelButton("cancelMixBtn", false);
+        abortControllers.mix = null;
     }
 }
 
@@ -684,18 +918,147 @@ function wireGainSlider(sliderId, labelId) {
 }
 
 /* =========================================================
-   init
+   Apply Masking — save unsaved files, then hand off to Audio Lab
    ========================================================= */
 
+function showSaveModal(defaultLabel) {
+    return new Promise((resolve) => {
+        const overlay = el("saveModalOverlay");
+        const card = overlay.querySelector(".save-modal-card");
+        const input = el("saveModalLabelInput");
+        const fileLabel = el("saveModalFileLabel");
+        const saveBtn = el("saveModalSaveBtn");
+        const skipBtn = el("saveModalSkipBtn");
+        const closeBtn = el("saveModalCloseBtn");
+
+        fileLabel.textContent = defaultLabel;
+        input.value = defaultLabel;
+        overlay.style.display = "flex";
+        input.focus();
+
+        function cleanup(result) {
+            overlay.style.display = "none";
+            saveBtn.removeEventListener("click", onSave);
+            skipBtn.removeEventListener("click", onSkip);
+            closeBtn.removeEventListener("click", onSkip);
+            overlay.removeEventListener("click", onOverlayClick);
+            resolve(result);
+        }
+
+        function onSave() {
+            const label = input.value.trim() || defaultLabel;
+            cleanup({ save: true, label });
+        }
+
+        function onSkip() {
+            cleanup({ save: false });
+        }
+
+        function onOverlayClick(event) {
+            if (!card.contains(event.target)) {
+                onSkip();
+            }
+        }
+
+        saveBtn.addEventListener("click", onSave);
+        skipBtn.addEventListener("click", onSkip);
+        closeBtn.addEventListener("click", onSkip);
+        overlay.addEventListener("click", onOverlayClick);
+    });
+}
+
+async function saveGeneratedFile(source, defaultLabel) {
+    const choice = await showSaveModal(defaultLabel);
+    if (!choice.save) {
+        return source;
+    }
+
+    const audioRes = await fetch("/media/audio/" + source);
+    const blob = await audioRes.blob();
+    const audio_base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+
+    const data = await apiPost_json("/audio/save", { audio_base64, label: choice.label });
+    return "saved/" + data.filename;
+}
+
+function goToAudioLab(source) {
+    sessionStorage.setItem("pendingSource", source);
+    window.location.href = "audio-lab.html";
+}
+
+async function applyMasking(kind) {
+    const tab = kind === "mixed" ? "mix" : "separate";
+
+    try {
+        setBusy(true);
+
+        if (kind === "vocal" || kind === "instrumental") {
+            const result = state.separateResult;
+            if (!result) throw new Error("No separation result yet.");
+
+            let vocalSource = result.vocal.source;
+            let instrumentalSource = result.instrumental.source;
+
+            if (kind === "vocal") {
+                instrumentalSource = await saveGeneratedFile(instrumentalSource, "instrumental");
+                vocalSource = await saveGeneratedFile(vocalSource, "vocal");
+                goToAudioLab(vocalSource);
+            } else {
+                vocalSource = await saveGeneratedFile(vocalSource, "vocal");
+                instrumentalSource = await saveGeneratedFile(instrumentalSource, "instrumental");
+                goToAudioLab(instrumentalSource);
+            }
+            return;
+        }
+
+        if (!state.lastMixResult) throw new Error("No mix result yet.");
+
+        if (state.mixInstrumentalGenerated) {
+            state.mixInstrumentalSource = await saveGeneratedFile(state.mixInstrumentalSource, "instrumental");
+            state.mixInstrumentalGenerated = false;
+        }
+        if (state.mixVocalGenerated) {
+            state.mixVocalSource = await saveGeneratedFile(state.mixVocalSource, "vocal");
+            state.mixVocalGenerated = false;
+        }
+
+        const mixedSaved = await saveGeneratedFile(state.lastMixResult.mixed.source, "mixed");
+        goToAudioLab(mixedSaved);
+
+    } catch (err) {
+        setStatus(err.message, "error", tab);
+    } finally {
+        setBusy(false);
+    }
+}
+
+/* =========================================================
+   init
+   ========================================================= */
 window.addEventListener("DOMContentLoaded", () => {
     initToplevelTabs();
 
-    // Wire all players for playback cursor tracking.
     wireMusicPlaybackTracking();
+
+    refreshMusicLibrary();
 
     wireDropzone("separateUploadInput", "separateDropzone", handleSeparateFileSelected);
     wireDropzone("mixInstrumentalInput", "mixInstrumentalDropzone", (file) => handleMixFileSelected("instrumental", file));
     wireDropzone("mixVocalInput", "mixVocalDropzone", (file) => handleMixFileSelected("vocal", file));
+
+    const sepLibSelect = el("separateLibrarySelect");
+    if (sepLibSelect) sepLibSelect.addEventListener("change", (e) => handleLibrarySelect("separate", e.target.value));
+
+    const mixInstLibSelect = el("mixInstrumentalLibrarySelect");
+    if (mixInstLibSelect) mixInstLibSelect.addEventListener("change", (e) => handleLibrarySelect("instrumental", e.target.value));
+
+    const mixVocLibSelect = el("mixVocalLibrarySelect");
+    if (mixVocLibSelect) mixVocLibSelect.addEventListener("change", (e) => handleLibrarySelect("vocal", e.target.value));
 
     wireGainSlider("instrumentalGainSlider", "instrumentalGainLabel");
     wireGainSlider("vocalGainSlider", "vocalGainLabel");
@@ -705,6 +1068,24 @@ window.addEventListener("DOMContentLoaded", () => {
     el("useInstrumentalInMixerBtn").addEventListener("click", () => sendToMixer("instrumental"));
     el("suggestOffsetBtn").addEventListener("click", runSuggestOffset);
     el("mixBtn").addEventListener("click", runMix);
+
+    const applyVocBtn = el("applyMaskingVocalBtn");
+    if (applyVocBtn) applyVocBtn.addEventListener("click", () => applyMasking("vocal"));
+
+    const applyInstBtn = el("applyMaskingInstrumentalBtn");
+    if (applyInstBtn) applyInstBtn.addEventListener("click", () => applyMasking("instrumental"));
+
+    const applyMixBtn = el("applyMaskingMixedBtn");
+    if (applyMixBtn) applyMixBtn.addEventListener("click", () => applyMasking("mixed"));
+
+    const cancelSepBtn = el("cancelSeparateBtn");
+    if (cancelSepBtn) cancelSepBtn.addEventListener("click", cancelSeparate);
+
+    const cancelSuggestBtn = el("cancelSuggestOffsetBtn");
+    if (cancelSuggestBtn) cancelSuggestBtn.addEventListener("click", cancelSuggestOffset);
+
+    const cancelMixBtn = el("cancelMixBtn");
+    if (cancelMixBtn) cancelMixBtn.addEventListener("click", cancelMix);
 
     refreshButtonStates();
 });
