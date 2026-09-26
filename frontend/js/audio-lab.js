@@ -1975,7 +1975,12 @@ async function runAnalyze() {
                 selectable: false,
             }
         );
+
         renderSpectrogram("retainSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false });
+        requestAnimationFrame(() => {
+            const p1 = el("retainSpectrogram");
+            if (p1 && p1.data) Plotly.Plots.resize(p1);
+        });
 
         setAudioFromSource();
 
@@ -2224,11 +2229,35 @@ async function applyMask() {
     }
 }
 
+
+
+function downloadBase64Audio(base64, suggestedName) {
+    const filename = suggestedName || "audio.wav";
+
+    const byteChars = atob(base64);
+    const byteNumbers = new Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) {
+        byteNumbers[i] = byteChars.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: "audio/wav" });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+
 async function saveMaskResult() {
     if (!state.lastMask) return;
-    const data = await apiPost_json("/audio/save", { audio_base64: state.lastMask.audio_base64, label: "masked" });
-    setStatus("Saved as " + data.filename, "success");
-    refreshLibrary();
+    downloadBase64Audio(state.lastMask.audio_base64, "masked.wav");
+    setStatus("Download started", "success");
 }
 
 /* ---------- progressive reconstruction ---------- */
@@ -2252,6 +2281,10 @@ async function applyRetention() {
         state.lastRetain = data;
 
         renderSpectrogram("retainResultSpectrogram", state.lastAnalyze.freqs, state.lastAnalyze.times, data.magnitude_db, { selectable: false });
+        requestAnimationFrame(() => {
+            const p2 = el("retainResultSpectrogram");
+            if (p2 && p2.data) Plotly.Plots.resize(p2);
+        });
         el("retainedPlayer").src = "data:audio/wav;base64," + data.audio_base64;
         el("retainReadout").innerHTML = `<div class="readout"><div class="readout-label">SNR</div><div class="readout-value">${fmt(data.snr_db, 2, " dB")}</div></div>`;
 
@@ -2263,11 +2296,11 @@ async function applyRetention() {
     }
 }
 
+
 async function saveRetainResult() {
     if (!state.lastRetain) return;
-    const data = await apiPost_json("/audio/save", { audio_base64: state.lastRetain.audio_base64, label: "retained" });
-    setStatus("Saved as " + data.filename, "success");
-    refreshLibrary();
+    downloadBase64Audio(state.lastRetain.audio_base64, "retained.wav");
+    setStatus("Download started", "success");
 }
 
 async function runSweep() {
@@ -2319,6 +2352,17 @@ function wireFreqToggle() {
         });
     });
 }
+
+
+function wireRetentionResize() {
+    window.addEventListener("resize", () => {
+        ["retainSpectrogram", "retainResultSpectrogram"].forEach((id) => {
+            const p = el(id);
+            if (p && p.data) Plotly.Plots.resize(p);
+        });
+    });
+}
+
 
 /* ---------- source mode toggle ---------- */
 
