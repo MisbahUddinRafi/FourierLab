@@ -1,0 +1,44 @@
+# =========================
+# Python cache / bytecode
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# User-uploaded audio
+# =========================
+backend/assets/audio/_uploads/
+
+# =========================
+# Music Lab generated files
+# =========================
+backend/assets/audio/_music_lab/
+
+# =========================
+# Generated/saved audio
+# =========================
+backend/assets/audio/saved/
+
+# =========================
+# Generated/saved images
+# =========================
+backend/assets/images/saved/
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# IDE / OS
+# =========================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+
+project-tree.md
