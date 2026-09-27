@@ -12,12 +12,11 @@ const state = {
     melFreqs: null,
     melMagnitudeDb: null,
 
-    // ---------------------------------------------------------
-    // Interactive masking state
-    // ---------------------------------------------------------
+    // Lasso masking state
     maskRegions: [],
     selectedMaskRegionId: null,
-    maskInteractionMode: "edit",
+    isDrawing: false,
+    drawingVertices: [],   // [{t, f}, ...] in data coords during active draw
 };
 
 
@@ -261,11 +260,12 @@ function renderSpectrogram(
         }
 
         if (isMaskPlot) {
-            attachMaskShapeClickHandler();
-            const plot = el("maskSpectrogram");
-            plot.on("plotly_relayout", handleMaskRelayout);
-            renderMaskRegionShapes();
-            setMaskInteractionMode(state.maskInteractionMode);
+            // Remove old Plotly shape machinery — lasso uses canvas overlay instead
+            initLassoCanvas();
+            wireLassoEvents();
+            drawRegionsOnCanvas();
+            // Disable Plotly's own drag so it doesn't fight the lasso canvas
+            Plotly.relayout(el("maskSpectrogram"), { dragmode: false });
         }
 
         if (options.onSelect) {
@@ -642,11 +642,6 @@ function resetResults() {
     el("emptyState").style.display = "block";
     el("labBody").style.display = "none";
 
-    // Reset mask selection values
-    el("timeMin").value = "";
-    el("timeMax").value = "";
-    el("freqMin").value = "";
-    el("freqMax").value = "";
 
     resetMaskRegions();
 
@@ -661,1217 +656,552 @@ function resetResults() {
    INTERACTIVE MASKING
    ========================================================= */
 
-let maskShapeEventAttached = false;
+/* =========================================================
+   LASSO MASKING
+   ========================================================= */
 
+let lassoCanvas = null;
+let lassoCtx = null;
+let lassoPixelPath = [];   // [{x,y}] raw pixel coords during draw
+let isLassoMouseDown = false;
+let lassoDocumentWired = false;
 
-function createMaskRegion(x0, x1, y0, y1) {
-    const timeMin = Math.min(Number(x0), Number(x1));
-    const timeMax = Math.max(Number(x0), Number(x1));
+function getLassoPlotAxes() {
+    const plot = el("maskSpectrogram");
+    if (!plot || !plot._fullLayout) return null;
+    const fl = plot._fullLayout;
+    if (!fl.xaxis || !fl.yaxis) return null;
+    return { xaxis: fl.xaxis, yaxis: fl.yaxis, plot };
+}
 
-    const freqMin = Math.min(Number(y0), Number(y1));
-    const freqMax = Math.max(Number(y0), Number(y1));
+function pixelToData(px, py) {
+    const axes = getLassoPlotAxes();
+    if (!axes) return null;
+    const { xaxis, yaxis } = axes;
+    // px/py are relative to the plot div, subtract the axis offsets
+    const t = xaxis.p2d(px - xaxis._offset);
+    const f = yaxis.p2d(py - yaxis._offset);
+    return { t, f };
+}
 
-    const nextId =
-        state.maskRegions.length > 0
-            ? Math.max(...state.maskRegions.map((r) => r.id)) + 1
-            : 1;
+function dataToPixel(t, f) {
+    const axes = getLassoPlotAxes();
+    if (!axes) return null;
+    const { xaxis, yaxis } = axes;
+    return {
+        x: xaxis.d2p(t) + xaxis._offset,
+        y: yaxis.d2p(f) + yaxis._offset,
+    };
+}
 
-    return clampMaskRegion({
-        id: nextId,
-        name: `Region ${nextId}`,
+function initLassoCanvas() {
+    const plot = el("maskSpectrogram");
+    if (!plot) return;
 
-        freqMin,
-        freqMax,
-        timeMin,
-        timeMax,
+    const old = document.getElementById("lassoCanvas");
+    if (old) old.remove();
 
-        mode: "remove",
-        enabled: true,
+    // Use Plotly's own reported dimensions so the canvas maps 1:1
+    // with the pixel coordinate system that dataToPixel() uses.
+    const fl = plot._fullLayout;
+    const canvasW = fl ? fl.width : plot.offsetWidth;
+    const canvasH = fl ? fl.height : plot.offsetHeight;
+
+    const canvas = document.createElement("canvas");
+    canvas.id = "lassoCanvas";
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+    canvas.style.cssText = `
+        position: absolute;
+        top: 0; left: 0;
+        width: ${canvasW}px;
+        height: ${canvasH}px;
+        pointer-events: auto;
+        z-index: 10;
+        border-radius: 4px;
+        cursor: crosshair;
+    `;
+
+    plot.style.position = "relative";
+    plot.appendChild(canvas);
+
+    lassoCanvas = canvas;
+    lassoCtx = canvas.getContext("2d");
+}
+
+function drawLassoPath() {
+    if (!lassoCtx || !lassoCanvas) return;
+    lassoCtx.clearRect(0, 0, lassoCanvas.width, lassoCanvas.height);
+
+    if (lassoPixelPath.length < 2) return;
+
+    lassoCtx.beginPath();
+    lassoCtx.moveTo(lassoPixelPath[0].x, lassoPixelPath[0].y);
+    for (let i = 1; i < lassoPixelPath.length; i++) {
+        lassoCtx.lineTo(lassoPixelPath[i].x, lassoPixelPath[i].y);
+    }
+
+    // Draw closing line back to start
+    lassoCtx.lineTo(lassoPixelPath[0].x, lassoPixelPath[0].y);
+
+    lassoCtx.strokeStyle = "#F5A623";
+    lassoCtx.lineWidth = 2;
+    lassoCtx.setLineDash([5, 3]);
+    lassoCtx.stroke();
+
+    // Fill with semi-transparent amber
+    lassoCtx.fillStyle = "rgba(245, 166, 35, 0.12)";
+    lassoCtx.fill();
+
+    // Draw start point circle so user knows where to close
+    lassoCtx.beginPath();
+    lassoCtx.arc(lassoPixelPath[0].x, lassoPixelPath[0].y, 5, 0, Math.PI * 2);
+    lassoCtx.fillStyle = "#F5A623";
+    lassoCtx.fill();
+    lassoCtx.setLineDash([]);
+}
+
+function drawRegionsOnCanvas() {
+    if (!lassoCtx || !lassoCanvas) return;
+    lassoCtx.clearRect(0, 0, lassoCanvas.width, lassoCanvas.height);
+
+    state.maskRegions.forEach((region) => {
+        if (!region.vertices || region.vertices.length < 3) return;
+
+        const pixels = region.vertices.map(v => dataToPixel(v.t, v.f)).filter(Boolean);
+        if (pixels.length < 3) return;
+
+        const selected = region.id === state.selectedMaskRegionId;
+        const color = region.mode === "isolate" ? "#C792EA" : "#F5A623";
+        const fillAlpha = selected ? 0.20 : 0.08;
+        const dash = region.enabled ? [] : [7, 5];
+
+        const tracePath = () => {
+            lassoCtx.beginPath();
+            lassoCtx.moveTo(pixels[0].x, pixels[0].y);
+            for (let i = 1; i < pixels.length; i++) {
+                lassoCtx.lineTo(pixels[i].x, pixels[i].y);
+            }
+            lassoCtx.closePath();
+        };
+
+        // Fill
+        tracePath();
+        lassoCtx.fillStyle = `rgba(${hexToRgb(color)}, ${fillAlpha})`;
+        lassoCtx.fill();
+
+        // Dark halo underneath the colored line so the border reads clearly
+        // against any part of the spectrogram — like a length of rope laid
+        // on top of the heatmap.
+        tracePath();
+        lassoCtx.strokeStyle = "rgba(6, 10, 20, 0.85)";
+        lassoCtx.lineWidth = selected ? 4.5 : 3.5;
+        lassoCtx.setLineDash(dash);
+        lassoCtx.stroke();
+
+        // Selected regions get an extra glow behind the string
+        if (selected) {
+            lassoCtx.save();
+            lassoCtx.shadowColor = color;
+            lassoCtx.shadowBlur = 14;
+            tracePath();
+            lassoCtx.strokeStyle = `rgba(${hexToRgb(color)}, 0.9)`;
+            lassoCtx.lineWidth = 2.5;
+            lassoCtx.setLineDash(dash);
+            lassoCtx.stroke();
+            lassoCtx.restore();
+        }
+
+        // Bright colored line on top — this is the "string" itself
+        tracePath();
+        lassoCtx.strokeStyle = color;
+        lassoCtx.lineWidth = selected ? 2.5 : 1.75;
+        lassoCtx.setLineDash(dash);
+        lassoCtx.stroke();
+        lassoCtx.setLineDash([]);
+
+        // Label with a small dark backing so it stays legible over any color
+        const cx = pixels.reduce((s, p) => s + p.x, 0) / pixels.length;
+        const cy = pixels.reduce((s, p) => s + p.y, 0) / pixels.length;
+        lassoCtx.font = "11px IBM Plex Mono, monospace";
+        const textWidth = lassoCtx.measureText(region.name).width;
+        lassoCtx.fillStyle = "rgba(6, 10, 20, 0.75)";
+        lassoCtx.fillRect(cx - textWidth / 2 - 5, cy - 9, textWidth + 10, 18);
+        lassoCtx.fillStyle = color;
+        lassoCtx.textAlign = "center";
+        lassoCtx.textBaseline = "middle";
+        lassoCtx.fillText(region.name, cx, cy);
     });
 }
 
+function hexToRgb(hex) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `${r}, ${g}, ${b}`;
+}
+
+function isNearStartPoint(px, py) {
+    if (lassoPixelPath.length === 0) return false;
+    const start = lassoPixelPath[0];
+    const dx = px - start.x;
+    const dy = py - start.y;
+    return Math.sqrt(dx * dx + dy * dy) < 12;
+}
+
+function getPlotRelativeCoords(event) {
+    const plot = el("maskSpectrogram");
+    if (!plot) return null;
+    const rect = plot.getBoundingClientRect();
+    return {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+    };
+}
+
+function pointInPolygon(t, f, vertices) {
+    let inside = false;
+    const n = vertices.length;
+    let j = n - 1;
+    for (let i = 0; i < n; i++) {
+        const xi = vertices[i].t, yi = vertices[i].f;
+        const xj = vertices[j].t, yj = vertices[j].f;
+        const intersect = ((yi > f) !== (yj > f)) &&
+            (t < (xj - xi) * (f - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+        j = i;
+    }
+    return inside;
+}
+
+function findTopmostRegionAt(t, f) {
+    // Search from end (last drawn = on top)
+    for (let i = state.maskRegions.length - 1; i >= 0; i--) {
+        const r = state.maskRegions[i];
+        if (r.vertices && pointInPolygon(t, f, r.vertices)) {
+            return r;
+        }
+    }
+    return null;
+}
+
+function wireLassoEvents() {
+    const canvas = lassoCanvas;
+    if (!canvas) return;
+
+    // mousedown always rebinds to the fresh canvas (a new one is created
+    // on every render), so no "already wired" guard needed here.
+    canvas.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+
+        const pos = getPlotRelativeCoords(e);
+        if (!pos) return;
+
+        if (!state.isDrawing) {
+            // Not in draw mode: clicking inside an existing region selects it
+            const dataPos = pixelToData(pos.x, pos.y);
+            if (dataPos) {
+                const hit = findTopmostRegionAt(dataPos.t, dataPos.f);
+                if (hit) selectMaskRegion(hit.id);
+            }
+            return;
+        }
+
+        // Draw mode is armed — this mousedown starts the actual path
+        lassoPixelPath = [{ x: pos.x, y: pos.y }];
+        state.drawingVertices = [];
+        const dp = pixelToData(pos.x, pos.y);
+        if (dp) state.drawingVertices.push(dp);
+        isLassoMouseDown = true;
+    });
+
+    canvas.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        cancelLassoDraw();
+    });
+
+    // Document-level listeners only need to be wired once — they don't
+    // depend on which canvas instance is currently on screen, and the
+    // canvas is recreated on every redraw.
+    if (lassoDocumentWired) return;
+    lassoDocumentWired = true;
+
+    document.addEventListener("mousemove", (e) => {
+        if (!state.isDrawing || !isLassoMouseDown) return;
+
+        const pos = getPlotRelativeCoords(e);
+        if (!pos) return;
+
+        const last = lassoPixelPath[lassoPixelPath.length - 1];
+        const dx = pos.x - last.x;
+        const dy = pos.y - last.y;
+        if (Math.sqrt(dx * dx + dy * dy) < 4) return;
+
+        lassoPixelPath.push({ x: pos.x, y: pos.y });
+        const dp = pixelToData(pos.x, pos.y);
+        if (dp) state.drawingVertices.push(dp);
+
+        drawLassoPath();
+    });
+
+    document.addEventListener("mouseup", () => {
+        if (!state.isDrawing || !isLassoMouseDown) return;
+        isLassoMouseDown = false;
+
+        if (state.drawingVertices.length >= 3) {
+            finalizeLassoRegion();
+        } else {
+            // Too few points, cancel
+            state.isDrawing = false;
+            lassoPixelPath = [];
+            state.drawingVertices = [];
+            if (lassoCtx && lassoCanvas) {
+                lassoCtx.clearRect(0, 0, lassoCanvas.width, lassoCanvas.height);
+            }
+            drawRegionsOnCanvas();
+            updateDrawModeUI();
+        }
+    });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && state.isDrawing) {
+            cancelLassoDraw();
+        }
+        if ((e.key === "Delete" || e.key === "Backspace") && !state.isDrawing) {
+            deleteSelectedMaskRegion();
+        }
+    });
+}
+
+function cancelLassoDraw() {
+    state.isDrawing = false;
+    lassoPixelPath = [];
+    state.drawingVertices = [];
+    if (lassoCtx && lassoCanvas) {
+        lassoCtx.clearRect(0, 0, lassoCanvas.width, lassoCanvas.height);
+    }
+    drawRegionsOnCanvas();
+    updateDrawModeUI();
+}
+
+function finalizeLassoRegion() {
+    const vertices = state.drawingVertices;
+    if (vertices.length < 3) return;
+
+    const nextId = state.maskRegions.length > 0
+        ? Math.max(...state.maskRegions.map(r => r.id)) + 1
+        : 1;
+
+    const region = {
+        id: nextId,
+        name: `Region ${nextId}`,
+        vertices: vertices,
+        mode: "remove",
+        enabled: true,
+    };
+
+    state.maskRegions.push(region);
+    state.selectedMaskRegionId = region.id;
+    state.isDrawing = false;
+    lassoPixelPath = [];
+    state.drawingVertices = [];
+
+    updateDrawModeUI();
+    updateMaskRegionDropdown();
+    updateMaskRegionEditor();
+    drawRegionsOnCanvas();
+}
+
+function updateDrawModeUI() {
+    const hint = el("maskModeHint");
+    const drawBtn = el("drawRegionBtn");
+    if (!hint || !drawBtn) return;
+
+    if (state.isDrawing) {
+        hint.textContent = "Hold and drag to draw. Release to close the region. Press Escape to cancel.";
+        drawBtn.classList.add("active");
+        drawBtn.textContent = "Cancel Draw";
+    } else {
+        hint.textContent = "Click Draw to start. Click inside a region to select it.";
+        drawBtn.classList.remove("active");
+        drawBtn.textContent = "Draw Region";
+    }
+}
+
+function selectMaskRegion(regionId) {
+    state.selectedMaskRegionId = regionId;
+    updateMaskRegionEditor();
+    updateMaskRegionDropdown();
+    drawRegionsOnCanvas();
+}
 
 function getSelectedMaskRegion() {
-    return state.maskRegions.find(
-        (region) => region.id === state.selectedMaskRegionId
-    ) || null;
+    return state.maskRegions.find(r => r.id === state.selectedMaskRegionId) || null;
 }
 
+function deleteSelectedMaskRegion() {
+    const region = getSelectedMaskRegion();
+    if (!region) return;
 
-function selectMaskRegion(regionId, refreshPlot = true) {
-    const region = state.maskRegions.find(
-        (item) => item.id === regionId
-    );
+    const idx = state.maskRegions.findIndex(r => r.id === region.id);
+    state.maskRegions.splice(idx, 1);
 
-    if (!region) {
+    if (state.maskRegions.length > 0) {
+        const nextIdx = Math.min(idx, state.maskRegions.length - 1);
+        state.selectedMaskRegionId = state.maskRegions[nextIdx].id;
+    } else {
         state.selectedMaskRegionId = null;
-        updateMaskRegionEditor();
-        if (refreshPlot) {
-            renderMaskRegionShapes();
-        }
-        return;
     }
-
-    state.selectedMaskRegionId = region.id;
 
     updateMaskRegionEditor();
     updateMaskRegionDropdown();
-
-    if (refreshPlot) {
-        renderMaskRegionShapes();
-    }
+    drawRegionsOnCanvas();
 }
-
-
-function clearMaskRegionSelection() {
-    state.selectedMaskRegionId = null;
-
-    updateMaskRegionEditor();
-    updateMaskRegionDropdown();
-    renderMaskRegionShapes();
-}
-
 
 function updateMaskRegionEditor() {
     const region = getSelectedMaskRegion();
-
-    const selectedLabel = el("maskSelectedRegion");
-    const dropdownLabel = el("maskRegionDropdownLabel");
-
-    const freqMin = el("freqMin");
-    const freqMax = el("freqMax");
-    const timeMin = el("timeMin");
-    const timeMax = el("timeMax");
-
-    const enabled = el("maskRegionEnabled");
     const editor = document.querySelector(".mask-editor-card");
+    const selectedLabel = el("maskSelectedRegion");
+    const enabled = el("maskRegionEnabled");
 
     if (!region) {
-        if (selectedLabel) {
-            selectedLabel.textContent = "None";
-        }
-
-        if (dropdownLabel) {
-            dropdownLabel.textContent = "No regions";
-        }
-
-        freqMin.value = "";
-        freqMax.value = "";
-        timeMin.value = "";
-        timeMax.value = "";
-
-        enabled.checked = false;
-
-        if (editor) {
-            editor.classList.add("region-empty");
-        }
-
-        document.querySelectorAll('input[name="maskMode"]').forEach((input) => {
-            input.checked = input.value === "remove";
-            input.disabled = true;
+        if (selectedLabel) selectedLabel.textContent = "None";
+        if (editor) editor.classList.add("region-empty");
+        if (enabled) { enabled.checked = false; enabled.disabled = true; }
+        document.querySelectorAll('input[name="maskMode"]').forEach(i => {
+            i.checked = i.value === "remove";
+            i.disabled = true;
         });
-
-        enabled.disabled = true;
-
         return;
     }
 
-    if (editor) {
-        editor.classList.remove("region-empty");
-    }
+    if (editor) editor.classList.remove("region-empty");
+    if (selectedLabel) selectedLabel.textContent = region.name;
+    if (enabled) { enabled.checked = region.enabled; enabled.disabled = false; }
 
-    if (selectedLabel) {
-        selectedLabel.textContent = region.name;
-    }
-
-    if (dropdownLabel) {
-        dropdownLabel.textContent = region.name;
-    }
-
-    freqMin.value = Number(region.freqMin).toFixed(0);
-    freqMax.value = Number(region.freqMax).toFixed(0);
-    timeMin.value = Number(region.timeMin).toFixed(2);
-    timeMax.value = Number(region.timeMax).toFixed(2);
-
-    enabled.checked = region.enabled;
-    enabled.disabled = false;
-
-    document.querySelectorAll('input[name="maskMode"]').forEach((input) => {
-        input.disabled = false;
-        input.checked = input.value === region.mode;
+    document.querySelectorAll('input[name="maskMode"]').forEach(i => {
+        i.disabled = false;
+        i.checked = i.value === region.mode;
     });
 }
 
-
 function updateMaskRegionDropdown() {
     const menu = el("maskRegionDropdownMenu");
-
+    const dropdownLabel = el("maskRegionDropdownLabel");
     if (!menu) return;
 
-    menu.innerHTML = "";
+    const region = getSelectedMaskRegion();
+    if (dropdownLabel) {
+        dropdownLabel.textContent = region ? region.name : "No regions";
+    }
 
     if (state.maskRegions.length === 0) {
-        menu.innerHTML = `
-            <div class="mask-region-empty">
-                No regions yet.
-            </div>
-        `;
+        menu.innerHTML = `<div class="mask-region-empty">No regions yet. Click Draw to start.</div>`;
         return;
     }
 
-    state.maskRegions.forEach((region) => {
+    menu.innerHTML = "";
+    state.maskRegions.forEach((r) => {
         const row = document.createElement("div");
-
-        row.className =
-            "mask-region-item" +
-            (region.id === state.selectedMaskRegionId ? " selected" : "");
-
-        row.dataset.regionId = region.id;
-
+        row.className = "mask-region-item" + (r.id === state.selectedMaskRegionId ? " selected" : "");
         row.innerHTML = `
-            <span class="mask-region-item-label">
-                ${region.name}
-            </span>
-
+            <span class="mask-region-item-label">${r.name}</span>
             <label class="mask-region-item-checkbox">
-                <input
-                    type="checkbox"
-                    ${region.enabled ? "checked" : ""}
-                    data-region-enable="${region.id}">
+                <input type="checkbox" ${r.enabled ? "checked" : ""} data-region-enable="${r.id}">
                 <span>Enabled</span>
             </label>
         `;
-
-        row.addEventListener("click", (event) => {
-
-            // Clicking the checkbox should only toggle enable/disable.
-            if (event.target.matches('input[type="checkbox"]')) {
-                return;
-            }
-
-            selectMaskRegion(region.id);
+        row.addEventListener("click", (e) => {
+            if (e.target.matches('input[type="checkbox"]')) return;
+            selectMaskRegion(r.id);
             closeMaskRegionDropdown();
         });
 
-        const checkbox = row.querySelector(
-            `[data-region-enable="${region.id}"]`
-        );
-
-        checkbox.addEventListener("change", (event) => {
-            region.enabled = event.target.checked;
-
+        const cb = row.querySelector(`[data-region-enable="${r.id}"]`);
+        cb.addEventListener("change", (e) => {
+            r.enabled = e.target.checked;
             updateMaskRegionEditor();
-            renderMaskRegionShapes();
+            drawRegionsOnCanvas();
         });
 
         menu.appendChild(row);
     });
 }
 
-
 function openMaskRegionDropdown() {
-    const dropdown = el("maskRegionDropdown");
-    if (!dropdown) return;
-
-    dropdown.classList.add("open");
+    el("maskRegionDropdown")?.classList.add("open");
 }
-
 
 function closeMaskRegionDropdown() {
-    const dropdown = el("maskRegionDropdown");
-    if (!dropdown) return;
-
-    dropdown.classList.remove("open");
+    el("maskRegionDropdown")?.classList.remove("open");
 }
-
 
 function toggleMaskRegionDropdown() {
-    const dropdown = el("maskRegionDropdown");
-
-    if (!dropdown) return;
-
-    dropdown.classList.toggle("open");
+    el("maskRegionDropdown")?.classList.toggle("open");
 }
 
+function resetMaskRegions() {
+    state.maskRegions = [];
+    state.selectedMaskRegionId = null;
+    state.isDrawing = false;
+    state.drawingVertices = [];
+    lassoPixelPath = [];
 
-function setMaskInteractionMode(mode) {
-
-    if (
-        mode !== "edit" &&
-        mode !== "add"
-    ) {
-        return;
+    if (lassoCtx && lassoCanvas) {
+        lassoCtx.clearRect(0, 0, lassoCanvas.width, lassoCanvas.height);
     }
 
-
-    state.maskInteractionMode = mode;
-
-
-    const editBtn =
-        el("editRegionModeBtn");
-
-    const addBtn =
-        el("addRegionModeBtn");
-
-    const hint =
-        el("maskModeHint");
-
-    const plot =
-        el("maskSpectrogram");
-
-
-    editBtn.classList.toggle(
-        "active",
-        mode === "edit"
-    );
-
-    addBtn.classList.toggle(
-        "active",
-        mode === "add"
-    );
-
-
-    if (mode === "edit") {
-
-        hint.textContent =
-            "Click a region to select it. Drag or resize the selected region.";
-
-
-        if (
-            plot &&
-            plot.layout
-        ) {
-
-            Plotly.relayout(
-                plot,
-                {
-                    dragmode: "false",
-                }
-            );
-        }
-
-    } else {
-
-        hint.textContent =
-            "Drag on empty space to create a new region.";
-
-
-        if (
-            plot &&
-            plot.layout
-        ) {
-
-            Plotly.relayout(
-                plot,
-                {
-                    dragmode: "drawrect",
-                }
-            );
-        }
-    }
-
-
-    /*
-     * Make only our region shapes editable while in Edit mode.
-     */
-    updateMaskShapeInteractivity();
-}
-
-
-function updateMaskShapeInteractivity() {
-    const plot = el("maskSpectrogram");
-
-    if (!plot || !plot.layout) return;
-
-    const shapes = plot.layout.shapes || [];
-
-    const updates = {};
-
-    shapes.forEach((shape, index) => {
-
-        if (!shape.name || !shape.name.startsWith("mask-region-")) {
-            return;
-        }
-
-        updates[`shapes[${index}].editable`] =
-            state.maskInteractionMode === "edit";
-    });
-
-    if (Object.keys(updates).length > 0) {
-        Plotly.relayout(plot, updates);
-    }
-}
-
-
-function getMaskRegionShapes() {
-    return state.maskRegions.map((region) => {
-
-        const selected =
-            region.id === state.selectedMaskRegionId;
-
-        const modeColor =
-            region.mode === "remove"
-                ? "#F5A623"
-                : "#C792EA";
-
-        return {
-            type: "rect",
-
-            xref: "x",
-            yref: "y",
-
-            x0: region.timeMin,
-            x1: region.timeMax,
-
-            y0: region.freqMin,
-            y1: region.freqMax,
-
-            name: `mask-region-${region.id}`,
-
-            editable:
-                state.maskInteractionMode === "edit",
-
-            layer: "above",
-
-            opacity: selected ? 0.55 : 0.32,
-
-            fillcolor:
-                region.enabled
-                    ? `rgba(245, 166, 35, ${selected ? 0.16 : 0.08})`
-                    : "rgba(120, 130, 145, 0.05)",
-
-            line: {
-                color: selected
-                    ? modeColor
-                    : region.enabled
-                        ? modeColor
-                        : "#7b8494",
-
-                width: selected ? 3 : 1.5,
-
-                dash:
-                    region.enabled
-                        ? "solid"
-                        : "dash",
-            },
-        };
-    });
-}
-
-
-function renderMaskRegionShapes() {
-    const plot = el("maskSpectrogram");
-
-    if (!plot || !plot.layout) return;
-
-    const existingShapes = plot.layout.shapes || [];
-
-    const playbackShapes = existingShapes.filter(
-        (shape) =>
-            shape.name &&
-            shape.name !== "playback-cursor" &&
-            shape.name !== "playback-progress" &&
-            !shape.name.startsWith("mask-region-")
-    );
-
-    const regionShapes = getMaskRegionShapes();
-
-    const currentPlaybackShapes = existingShapes.filter(
-        (shape) =>
-            shape.name === "playback-cursor" ||
-            shape.name === "playback-progress"
-    );
-
-    Plotly.relayout(plot, {
-        shapes: [
-            ...playbackShapes,
-            ...regionShapes,
-            ...currentPlaybackShapes,
-        ],
-    });
-
-    updateMaskRegionDropdown();
-    updateMaskRegionEditor();
-}
-
-
-function syncSelectedMaskRegionFromShape(shapeIndex, shape) {
-    if (!shape) return;
-
-    if (
-        !shape.name ||
-        !shape.name.startsWith("mask-region-")
-    ) {
-        return;
-    }
-
-    const id = Number(
-        shape.name.replace("mask-region-", "")
-    );
-
-    const region = state.maskRegions.find(
-        (item) => item.id === id
-    );
-
-    if (!region) return;
-
-    const x0 = Number(shape.x0);
-    const x1 = Number(shape.x1);
-    const y0 = Number(shape.y0);
-    const y1 = Number(shape.y1);
-
-    if (
-        !Number.isFinite(x0) ||
-        !Number.isFinite(x1) ||
-        !Number.isFinite(y0) ||
-        !Number.isFinite(y1)
-    ) {
-        return;
-    }
-
-    region.timeMin = Math.max(0, Math.min(x0, x1));
-    region.timeMax = Math.min(
-        state.duration,
-        Math.max(x0, x1)
-    );
-
-    region.freqMin = Math.max(
-        0,
-        Math.min(y0, y1)
-    );
-
-    region.freqMax = Math.min(
-        state.sr / 2,
-        Math.max(y0, y1)
-    );
-
-    state.selectedMaskRegionId = region.id;
-
-    updateMaskRegionEditor();
-    updateMaskRegionDropdown();
-    updateMaskRegionShapesOnly();
-}
-
-
-function updateMaskRegionShapesOnly() {
-    const plot = el("maskSpectrogram");
-
-    if (!plot || !plot.layout) return;
-
-    const shapes = plot.layout.shapes || [];
-
-    const updates = {};
-
-    state.maskRegions.forEach((region) => {
-
-        const shapeIndex = shapes.findIndex(
-            (shape) =>
-                shape.name === `mask-region-${region.id}`
-        );
-
-        if (shapeIndex === -1) return;
-
-        updates[`shapes[${shapeIndex}].x0`] = region.timeMin;
-        updates[`shapes[${shapeIndex}].x1`] = region.timeMax;
-        updates[`shapes[${shapeIndex}].y0`] = region.freqMin;
-        updates[`shapes[${shapeIndex}].y1`] = region.freqMax;
-    });
-
-    if (Object.keys(updates).length > 0) {
-        Plotly.relayout(plot, updates);
-    }
-}
-
-let maskNeedsRestyle = false;
-
-function findTopMaskRegionAt(event) {
-    const plot = el("maskSpectrogram");
-    const fl = plot && plot._fullLayout;
-
-    if (!fl || !fl.xaxis || !fl.yaxis) return null;
-
-    const box = plot.getBoundingClientRect();
-
-    const px = event.clientX - box.left - fl.xaxis._offset;
-    const py = event.clientY - box.top - fl.yaxis._offset;
-
-    // Ignore clicks outside the plotting area.
-    if (px < 0 || px > fl.xaxis._length || py < 0 || py > fl.yaxis._length) {
-        return null;
-    }
-
-    const x = fl.xaxis.p2d(px);
-    const y = fl.yaxis.p2d(py);
-
-    // Last region = drawn on top, so search from the end.
-    for (let i = state.maskRegions.length - 1; i >= 0; i--) {
-        const r = state.maskRegions[i];
-
-        if (x >= r.timeMin && x <= r.timeMax && y >= r.freqMin && y <= r.freqMax) {
-            return r;
-        }
-    }
-
-    return null;
-}
-
-
-function attachMaskShapeClickHandler() {
-    const plot = el("maskSpectrogram");
-
-    if (!plot || maskShapeEventAttached) return;
-
-    maskShapeEventAttached = true;
-
-    plot.addEventListener("mousedown", (event) => {
-        if (state.maskInteractionMode !== "edit" || event.button !== 0) return;
-        if (event.target.closest && event.target.closest(".modebar")) return;
-
-        const hit = findTopMaskRegionAt(event);
-
-        if (!hit || hit.id === state.selectedMaskRegionId) return;
-
-        state.selectedMaskRegionId = hit.id;
-
-        updateMaskRegionEditor();
-        updateMaskRegionDropdown();
-
-        maskNeedsRestyle = true;
-    });
-
-    // Repaint the highlight only after the mouse is released,
-    // so we never interrupt Plotly's drag/resize.
-    plot.addEventListener("mouseup", () => {
-        if (!maskNeedsRestyle) return;
-
-        maskNeedsRestyle = false;
-        setTimeout(renderMaskRegionShapes, 50);
-    });
-}
-
-
-function clampMaskRegion(region) {
-    const maxTime = state.duration > 0 ? state.duration : Infinity;
-    const maxFreq = state.sr / 2;
-
-    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, Number(v) || 0));
-
-    let tMin = clamp(region.timeMin, 0, maxTime);
-    let tMax = clamp(region.timeMax, 0, maxTime);
-    let fMin = clamp(region.freqMin, 0, maxFreq);
-    let fMax = clamp(region.freqMax, 0, maxFreq);
-
-    if (tMax < tMin) [tMin, tMax] = [tMax, tMin];
-    if (fMax < fMin) [fMin, fMax] = [fMax, fMin];
-
-    region.timeMin = tMin;
-    region.timeMax = tMax;
-    region.freqMin = fMin;
-    region.freqMax = fMax;
-
-    return region;
-}
-
-
-
-function handleMaskRelayout(eventData) {
-
-    if (!eventData) {
-        return;
-    }
-
-    const plot = el("maskSpectrogram");
-
-    if (!plot) {
-        return;
-    }
-
-
-    /*
-     * =========================================================
-     * 1. Detect newly drawn rectangle
-     * =========================================================
-     *
-     * Plotly can report a newly created shape directly through
-     * eventData:
-     *
-     *   shapes[0] = {...}
-     *
-     * or:
-     *
-     *   shapes[0].x0
-     *   shapes[0].x1
-     *   shapes[0].y0
-     *   shapes[0].y1
-     *
-     * We inspect eventData directly instead of relying only on
-     * plot.layout.shapes.
-     */
-
-    const hasShapeKey = Object.keys(eventData).some((k) => k.startsWith("shapes"));
-
-    if (state.maskInteractionMode === "add" && hasShapeKey) {
-
-        let newShape = null;
-
-        const layoutShapes = plot.layout?.shapes || [];
-
-        // Plotly's freshly drawn rectangle has no name.
-        // Our own regions are named "mask-region-N", and playback shapes have names too.
-        newShape = layoutShapes.find(
-            (s) => s && s.type === "rect" && !s.name
-        ) || null;
-
-        console.log("[mask] relayout:", eventData, "newShape:", newShape);
-
-
-
-        /*
-         * If a new rectangle was actually created,
-         * register it as one of our application regions.
-         */
-        if (newShape) {
-
-            const x0 = Number(newShape.x0);
-            const x1 = Number(newShape.x1);
-            const y0 = Number(newShape.y0);
-            const y1 = Number(newShape.y1);
-
-
-            if (
-                Number.isFinite(x0) &&
-                Number.isFinite(x1) &&
-                Number.isFinite(y0) &&
-                Number.isFinite(y1)
-            ) {
-
-                /*
-                 * Ignore tiny accidental drags.
-                 */
-                if (
-                    Math.abs(x1 - x0) >= 0.01 &&
-                    Math.abs(y1 - y0) >= 1
-                ) {
-
-                    const region =
-                        createMaskRegion(
-                            x0,
-                            x1,
-                            y0,
-                            y1
-                        );
-
-
-                    /*
-                     * Add it to application state.
-                     */
-                    state.maskRegions.push(
-                        region
-                    );
-
-                    /*
-                     * Automatically select it.
-                     */
-                    state.selectedMaskRegionId =
-                        region.id;
-
-
-                    /*
-                     * Rebuild ALL region shapes from our
-                     * application state.
-                     *
-                     * This removes Plotly's temporary unnamed
-                     * drawing shape and replaces it with our
-                     * properly named/editable region.
-                     */
-                    const regionShapes =
-                        getMaskRegionShapes();
-
-
-                    const currentShapes =
-                        plot.layout?.shapes || [];
-
-
-                    const persistentShapes =
-                        currentShapes.filter(
-                            (shape) =>
-                                shape.name &&
-                                shape.name !== "playback-cursor" &&
-                                shape.name !== "playback-progress" &&
-                                !shape.name.startsWith("mask-region-")
-                        );
-
-                    const playbackShapes =
-                        currentShapes.filter(
-                            (shape) =>
-                                shape.name ===
-                                "playback-cursor" ||
-                                shape.name ===
-                                "playback-progress"
-                        );
-
-                    state.maskInteractionMode = "edit";
-
-                    Plotly.relayout(plot, {
-                        shapes: [
-                            ...persistentShapes,
-                            ...regionShapes,
-                            ...playbackShapes,
-                        ],
-
-                        /*
-                         * Once the rectangle is registered,
-                         * return to normal editing.
-                         */
-                        dragmode: "false",
-                    });
-
-
-                    /*
-                     * Update our UI state.
-                     */
-                    state.maskInteractionMode =
-                        "edit";
-
-
-                    el(
-                        "editRegionModeBtn"
-                    ).classList.add("active");
-
-                    el(
-                        "addRegionModeBtn"
-                    ).classList.remove("active");
-
-
-                    el(
-                        "maskModeHint"
-                    ).textContent =
-                        "Click a region to select it. Drag or resize the selected region.";
-
-
-                    updateMaskRegionDropdown();
-
-                    updateMaskRegionEditor();
-
-                    return;
-                }
-            }
-        }
-    }
-
-
-    /*
-     * =========================================================
-     * 2. Detect movement / resizing of existing regions
-     * =========================================================
-     */
-
-    if (
-        state.maskInteractionMode === "edit"
-    ) {
-
-        const shapes =
-            plot.layout?.shapes || [];
-
-
-        const changedRegionIds =
-            new Set();
-
-
-        Object.keys(eventData).forEach(
-            (key) => {
-
-                const match = key.match(
-                    /^shapes\[(\d+)\]/
-                );
-
-                if (!match) {
-                    return;
-                }
-
-                const index =
-                    Number(match[1]);
-
-                const shape =
-                    shapes[index];
-
-                if (
-                    !shape ||
-                    !shape.name ||
-                    !shape.name.startsWith(
-                        "mask-region-"
-                    )
-                ) {
-                    return;
-                }
-
-                const id =
-                    Number(
-                        shape.name.replace(
-                            "mask-region-",
-                            ""
-                        )
-                    );
-
-                if (
-                    Number.isInteger(id)
-                ) {
-                    changedRegionIds.add(id);
-                }
-            }
-        );
-
-
-        /*
-         * Synchronize every changed region.
-         */
-        changedRegionIds.forEach(
-            (id) => {
-
-                const region =
-                    state.maskRegions.find(
-                        (item) =>
-                            item.id === id
-                    );
-
-                if (!region) {
-                    return;
-                }
-
-
-                const shape =
-                    shapes.find(
-                        (item) =>
-                            item.name ===
-                            `mask-region-${id}`
-                    );
-
-                if (!shape) {
-                    return;
-                }
-
-
-                const x0 =
-                    Number(shape.x0);
-
-                const x1 =
-                    Number(shape.x1);
-
-                const y0 =
-                    Number(shape.y0);
-
-                const y1 =
-                    Number(shape.y1);
-
-
-                if (
-                    !Number.isFinite(x0) ||
-                    !Number.isFinite(x1) ||
-                    !Number.isFinite(y0) ||
-                    !Number.isFinite(y1)
-                ) {
-                    return;
-                }
-
-
-                region.timeMin =
-                    Math.max(
-                        0,
-                        Math.min(x0, x1)
-                    );
-
-                region.timeMax =
-                    Math.min(
-                        state.duration,
-                        Math.max(x0, x1)
-                    );
-
-
-                region.freqMin =
-                    Math.max(
-                        0,
-                        Math.min(y0, y1)
-                    );
-
-                region.freqMax =
-                    Math.min(
-                        state.sr / 2,
-                        Math.max(y0, y1)
-                    );
-
-
-                /*
-                 * The edited region becomes the selected region.
-                 */
-                state.selectedMaskRegionId =
-                    region.id;
-            }
-        );
-
-
-        if (
-            changedRegionIds.size > 0
-        ) {
-
-            updateMaskRegionEditor();
-
-            updateMaskRegionDropdown();
-        }
-    }
+    closeMaskRegionDropdown();
+    updateDrawModeUI();
+
+    if (el("maskRegionDropdownMenu")) updateMaskRegionDropdown();
+    if (el("maskSelectedRegion")) updateMaskRegionEditor();
 }
 
 function wireMaskRegionControls() {
+    el("maskRegionDropdownBtn")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleMaskRegionDropdown();
+    });
 
-    el("maskRegionDropdownBtn").addEventListener(
-        "click",
-        (event) => {
-            event.stopPropagation();
-            toggleMaskRegionDropdown();
-        }
-    );
-
-
-    document.addEventListener("click", (event) => {
-
+    document.addEventListener("click", (e) => {
         const dropdown = el("maskRegionDropdown");
-
-        if (!dropdown) return;
-
-        if (!dropdown.contains(event.target)) {
+        if (dropdown && !dropdown.contains(e.target)) {
             closeMaskRegionDropdown();
         }
     });
 
-
-    el("editRegionModeBtn").addEventListener(
-        "click",
-        () => {
-            setMaskInteractionMode("edit");
+    el("drawRegionBtn")?.addEventListener("click", () => {
+        if (state.isDrawing) {
+            cancelLassoDraw();
+        } else {
+            state.isDrawing = true;
+            lassoPixelPath = [];
+            state.drawingVertices = [];
+            updateDrawModeUI();
         }
-    );
-
-
-    el("addRegionModeBtn").addEventListener(
-        "click",
-        () => {
-            setMaskInteractionMode("add");
-        }
-    );
-
-
-    const coordinateInputs = [
-        ["freqMin", "freqMin"],
-        ["freqMax", "freqMax"],
-        ["timeMin", "timeMin"],
-        ["timeMax", "timeMax"],
-    ];
-
-
-    coordinateInputs.forEach(([inputId, property]) => {
-
-        el(inputId).addEventListener(
-            "change",
-            () => {
-
-                const region = getSelectedMaskRegion();
-
-                if (!region) return;
-
-                const value = Number(
-                    el(inputId).value
-                );
-
-                if (!Number.isFinite(value)) {
-                    updateMaskRegionEditor();
-                    return;
-                }
-
-                region[property] = value;
-
-                /*
-                 * Normalize the range.
-                 */
-                if (
-                    property === "freqMin" ||
-                    property === "freqMax"
-                ) {
-                    region.freqMin = Math.max(
-                        0,
-                        Math.min(region.freqMin, state.sr / 2)
-                    );
-
-                    region.freqMax = Math.max(
-                        0,
-                        Math.min(region.freqMax, state.sr / 2)
-                    );
-                }
-
-                if (
-                    region.freqMax < region.freqMin
-                ) {
-                    [
-                        region.freqMin,
-                        region.freqMax
-                    ] = [
-                            region.freqMax,
-                            region.freqMin
-                        ];
-                }
-
-                if (
-                    region.timeMax < region.timeMin
-                ) {
-                    [
-                        region.timeMin,
-                        region.timeMax
-                    ] = [
-                            region.timeMax,
-                            region.timeMin
-                        ];
-                }
-
-                region.timeMin = Math.max(
-                    0,
-                    Math.min(region.timeMin, state.duration)
-                );
-
-                region.timeMax = Math.max(
-                    0,
-                    Math.min(region.timeMax, state.duration)
-                );
-
-                updateMaskRegionEditor();
-                updateMaskRegionShapesOnly();
-            }
-        );
     });
 
-
-    el("maskRegionEnabled").addEventListener(
-        "change",
-        (event) => {
-
-            const region = getSelectedMaskRegion();
-
-            if (!region) return;
-
-            region.enabled = event.target.checked;
-
-            updateMaskRegionDropdown();
-            renderMaskRegionShapes();
-        }
-    );
-
-
-    document
-        .querySelectorAll('input[name="maskMode"]')
-        .forEach((input) => {
-
-            input.addEventListener(
-                "change",
-                (event) => {
-
-                    const region = getSelectedMaskRegion();
-
-                    if (!region) return;
-
-                    region.mode = event.target.value;
-
-                    renderMaskRegionShapes();
-                    updateMaskRegionEditor();
-                }
-            );
-        });
-
-
-    el("deleteMaskRegionBtn").addEventListener(
-        "click",
-        deleteSelectedMaskRegion
-    );
-}
-
-
-function deleteSelectedMaskRegion() {
-
-    const region = getSelectedMaskRegion();
-
-    if (!region) return;
-
-    const deletedIndex =
-        state.maskRegions.findIndex(
-            (item) => item.id === region.id
-        );
-
-    if (deletedIndex === -1) return;
-
-    state.maskRegions.splice(
-        deletedIndex,
-        1
-    );
-
-
-    /*
-     * Select the nearest remaining region.
-     */
-    if (state.maskRegions.length > 0) {
-
-        const nextIndex = Math.min(
-            deletedIndex,
-            state.maskRegions.length - 1
-        );
-
-        state.selectedMaskRegionId =
-            state.maskRegions[nextIndex].id;
-
-    } else {
-
-        state.selectedMaskRegionId = null;
-    }
-
-
-    renderMaskRegionShapes();
-}
-
-
-function resetMaskRegions() {
-
-    state.maskRegions = [];
-    state.selectedMaskRegionId = null;
-    state.maskInteractionMode = "edit";
-
-    closeMaskRegionDropdown();
-
-    const editBtn =
-        el("editRegionModeBtn");
-
-    const addBtn =
-        el("addRegionModeBtn");
-
-    const hint =
-        el("maskModeHint");
-
-    if (editBtn) {
-        editBtn.classList.add("active");
-    }
-
-    if (addBtn) {
-        addBtn.classList.remove("active");
-    }
-
-    if (hint) {
-        hint.textContent =
-            "Click a region to select it. Drag or resize the selected region.";
-    }
-
-    if (el("maskRegionDropdownMenu")) {
+    el("maskRegionEnabled")?.addEventListener("change", (e) => {
+        const region = getSelectedMaskRegion();
+        if (!region) return;
+        region.enabled = e.target.checked;
         updateMaskRegionDropdown();
-    }
+        drawRegionsOnCanvas();
+    });
 
-    if (el("freqMin")) {
-        updateMaskRegionEditor();
-    }
+    document.querySelectorAll('input[name="maskMode"]').forEach(input => {
+        input.addEventListener("change", (e) => {
+            const region = getSelectedMaskRegion();
+            if (!region) return;
+            region.mode = e.target.value;
+            updateMaskRegionEditor();
+            drawRegionsOnCanvas();
+        });
+    });
+
+    el("deleteMaskRegionBtn")?.addEventListener("click", deleteSelectedMaskRegion);
 }
-
 
 
 
@@ -1914,9 +1244,6 @@ async function runAnalyze() {
         }, 100);
 
         setAudioFromSource();
-
-        el("timeMin").max = data.duration; el("timeMax").max = data.duration; el("timeMax").value = data.duration.toFixed(2);
-        el("freqMax").max = data.sr / 2; el("freqMax").value = (data.sr / 2).toFixed(0);
 
         document.querySelectorAll(".lab-tab").forEach((b) => (b.disabled = false));
         document.getElementById("emptyState").style.display = "none";
@@ -1997,153 +1324,69 @@ async function generateComponent(mode, playerId) {
 /* ---------- masking ---------- */
 
 async function applyMask() {
-
     try {
-
         if (state.maskRegions.length === 0) {
-            setStatus(
-                "Create at least one masking region first.",
-                "error"
-            );
+            setStatus("Draw at least one masking region first.", "error");
             return;
         }
 
-
-        const enabledRegions =
-            state.maskRegions.filter(
-                (region) => region.enabled
-            );
-
-
+        const enabledRegions = state.maskRegions.filter(r => r.enabled);
         if (enabledRegions.length === 0) {
-            setStatus(
-                "Enable at least one masking region.",
-                "error"
-            );
+            setStatus("Enable at least one masking region.", "error");
             return;
         }
-
 
         setBusy(true);
         setStatus("Applying mask...");
 
-
         const req = {
-
             source: state.source,
-
             sr: state.sr,
-
             n_fft: state.n_fft,
-
             hop_length: state.hop_length,
-
-            regions: enabledRegions
-                .map((region) => clampMaskRegion({ ...region }))
-                .filter((r) => r.timeMax > r.timeMin && r.freqMax > r.freqMin)
-                .map((region) => ({
-                    freq_min: region.freqMin,
-                    freq_max: region.freqMax,
-
-                    time_min: region.timeMin,
-                    time_max: region.timeMax,
-
-                    mode: region.mode,
-
-                    enabled: region.enabled,
-                })),
+            regions: enabledRegions.map(region => ({
+                vertices: region.vertices.map(v => ({ t: v.t, f: v.f })),
+                mode: region.mode,
+                enabled: region.enabled,
+            })),
         };
 
-        if (req.regions.length === 0) {
-            setStatus("Enabled regions have no valid area inside the audio.", "error");
-            setBusy(false);
-            return;
-        }
-
-
-        const data =
-            await apiPost_json(
-                "/audio/mask",
-                req
-            );
-
-
+        const data = await apiPost_json("/audio/mask", req);
         state.lastMask = data;
 
+        renderSpectrogram(
+            "maskResultSpectrogram",
+            state.lastAnalyze.freqs,
+            state.lastAnalyze.times,
+            data.magnitude_db,
+            { selectable: false }
+        );
 
-        renderSpectrogram("maskResultSpectrogram", state.lastAnalyze.freqs, state.lastAnalyze.times, data.magnitude_db, { selectable: false });
-
-
-        const maskedPlayer =
-            el("maskedPlayer");
-
-
-        maskedPlayer.src =
-            "data:audio/wav;base64," +
-            data.audio_base64;
-
+        const maskedPlayer = el("maskedPlayer");
+        maskedPlayer.src = "data:audio/wav;base64," + data.audio_base64;
         maskedPlayer.load();
 
-
         el("maskReadouts").innerHTML = `
-
             <div class="readout">
-
-                <div class="readout-label">
-                    SNR
-                </div>
-
-                <div class="readout-value">
-                    ${fmt(data.snr_db, 2, " dB")}
-                </div>
-
+                <div class="readout-label">SNR</div>
+                <div class="readout-value">${fmt(data.snr_db, 2, " dB")}</div>
             </div>
-
-
             <div class="readout">
-
-                <div class="readout-label">
-                    MSE
-                </div>
-
-                <div class="readout-value">
-                    ${data.mse.toFixed(6)}
-                </div>
-
+                <div class="readout-label">MSE</div>
+                <div class="readout-value">${data.mse.toFixed(6)}</div>
             </div>
-
-
             <div class="readout">
-
-                <div class="readout-label">
-                    Spectral Conv.
-                </div>
-
-                <div class="readout-value">
-                    ${data.spectral_convergence.toFixed(4)}
-                </div>
-
+                <div class="readout-label">Spectral Conv.</div>
+                <div class="readout-value">${data.spectral_convergence.toFixed(4)}</div>
             </div>
-
         `;
 
-
         updateMetricsTab(data);
-
-        setStatus(
-            "Mask applied",
-            "success"
-        );
+        setStatus("Mask applied", "success");
 
     } catch (err) {
-
-        setStatus(
-            err.message,
-            "error"
-        );
-
+        setStatus(err.message, "error");
     } finally {
-
         setBusy(false);
     }
 }

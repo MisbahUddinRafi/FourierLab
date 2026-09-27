@@ -96,27 +96,25 @@ class ComponentRequest(AnalyzeRequest):
     mode: str  # "magnitude_only" | "phase_only"
 
 
+class MaskVertex(BaseModel):
+    t: float  # time in seconds
+    f: float  # frequency in Hz
+
+
 class MaskRegion(BaseModel):
-    freq_min: float
-    freq_max: float
-    time_min: float
-    time_max: float
-    mode: str  # "remove" | "isolate"
+    vertices: list[MaskVertex]  # polygon vertices, min 3
+    mode: str                   # "remove" | "isolate"
     enabled: bool = True
 
 
 class MaskRequest(AnalyzeRequest):
-    # New multi-region masking API
     regions: list[MaskRegion] | None = None
-
-    # Legacy single-region fields.
-    # These remain optional so the existing frontend continues to work.
+    # Legacy single-region fields kept for backward compat
     freq_min: float | None = None
     freq_max: float | None = None
     time_min: float | None = None
     time_max: float | None = None
     mode: str | None = None
-
 
 class RetainRequest(AnalyzeRequest):
     strategy: str  # "low_frequency" | "top_magnitude"
@@ -227,63 +225,31 @@ def mask_audio(req: MaskRequest):
     # New multi-region masking
     # ---------------------------------------------------------
     if req.regions is not None:
-
         if len(req.regions) == 0:
-            raise HTTPException(
-                400,
-                "At least one masking region is required."
-            )
+            raise HTTPException(400, "At least one masking region is required.")
 
+        duration = len(y) / sr
+        nyquist = sr / 2
         regions = []
 
         for region in req.regions:
             if region.mode not in {"remove", "isolate"}:
-                raise HTTPException(
-                    400,
-                    "Region mode must be 'remove' or 'isolate'."
-                )
+                raise HTTPException(400, "Region mode must be 'remove' or 'isolate'.")
 
-            if region.freq_min < 0:
-                raise HTTPException(
-                    400,
-                    "Frequency minimum cannot be negative."
-                )
+            if len(region.vertices) < 3:
+                raise HTTPException(400, "Each polygon region must have at least 3 vertices.")
 
-            if region.freq_max <= region.freq_min:
-                raise HTTPException(
-                    400,
-                    "Frequency maximum must be greater than frequency minimum."
-                )
+            for v in region.vertices:
+                if v.t < 0 or v.t > duration:
+                    raise HTTPException(400, f"Vertex time {v.t:.3f}s out of range [0, {duration:.3f}s].")
+                if v.f < 0 or v.f > nyquist:
+                    raise HTTPException(400, f"Vertex frequency {v.f:.1f}Hz out of range [0, {nyquist:.1f}Hz].")
 
-            if region.time_min < 0:
-                raise HTTPException(
-                    400,
-                    "Time minimum cannot be negative."
-                )
-
-            if region.time_max <= region.time_min:
-                raise HTTPException(
-                    400,
-                    "Time maximum must be greater than time minimum."
-                )
-
-            if region.freq_max > sr / 2:
-                raise HTTPException(
-                    400,
-                    f"Frequency maximum cannot exceed Nyquist frequency "
-                    f"({sr / 2:.0f} Hz)."
-                )
-
-            duration = len(y) / sr
-
-            if region.time_max > duration:
-                raise HTTPException(
-                    400,
-                    f"Time maximum cannot exceed audio duration "
-                    f"({duration:.3f} s)."
-                )
-
-            regions.append(region.model_dump())
+            regions.append({
+                "vertices": [[v.t, v.f] for v in region.vertices],
+                "mode": region.mode,
+                "enabled": region.enabled,
+            })
 
         keep_mask = build_multi_region_mask(
             shape=D.shape,
@@ -292,7 +258,6 @@ def mask_audio(req: MaskRequest):
             hop_length=req.hop_length,
             regions=regions,
         )
-
     # ---------------------------------------------------------
     # Legacy single-region masking
     #

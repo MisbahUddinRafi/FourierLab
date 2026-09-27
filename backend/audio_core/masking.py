@@ -77,6 +77,59 @@ def build_region_mask(
     return np.outer(freq_in_region, time_in_region)
 
 
+def build_polygon_mask(
+    shape: tuple,
+    sr: int,
+    n_fft: int,
+    hop_length: int,
+    vertices: list,
+) -> np.ndarray:
+    """
+    Build a boolean mask for an arbitrary polygon region.
+    vertices: list of [time_sec, freq_hz] pairs (at least 3).
+    Uses ray-casting point-in-polygon test.
+    True = inside the polygon.
+    """
+    n_freq_bins, n_frames = shape
+
+    freqs = frequency_axis(sr=sr, n_fft=n_fft)
+    times = time_axis(n_frames, sr=sr, hop_length=hop_length)
+
+    # Extract polygon edges as arrays for vectorized testing
+    vx = np.array([v[0] for v in vertices], dtype=np.float64)  # time coords
+    vy = np.array([v[1] for v in vertices], dtype=np.float64)  # freq coords
+
+    n_verts = len(vx)
+
+    # Build 2D grid: rows=freq bins, cols=time frames
+    # T[i,j] = time of frame j, F[i,j] = freq of bin i
+    T, F = np.meshgrid(times, freqs)  # both shape (n_freq_bins, n_frames)
+
+    inside = np.zeros((n_freq_bins, n_frames), dtype=bool)
+
+    # Vectorized ray-casting: for each edge (vi -> vj),
+    # count how many edges cross the ray cast rightward from each point
+    j = n_verts - 1
+    for i in range(n_verts):
+        xi, yi = vx[i], vy[i]
+        xj, yj = vx[j], vy[j]
+
+        # Condition 1: one vertex above, one below the test point (freq axis)
+        cond1 = ((vy[i] > F) != (vy[j] > F))
+
+        # Condition 2: test point is left of the edge crossing
+        # x_intersect = xj + (F - yj) / (yi - yj) * (xi - xj)
+        dy = yi - yj
+        # Avoid division by zero — where dy==0, cond1 is already False
+        safe_dy = np.where(dy == 0, 1.0, dy)
+        x_intersect = xj + (F - yj) / safe_dy * (xi - xj)
+        cond2 = T < x_intersect
+
+        inside ^= (cond1 & cond2)
+        j = i
+
+    return inside
+
 def build_multi_region_mask(
     shape: tuple,
     sr: int,
@@ -85,85 +138,61 @@ def build_multi_region_mask(
     regions: list,
 ) -> np.ndarray:
     """
-    Build one final keep-mask from multiple time-frequency regions.
+    Build one final keep-mask from multiple polygon regions.
 
-    Region rules:
-
-        Remove + Remove   -> Remove
-        Remove + Isolate  -> Remove
-        Isolate + Remove  -> Remove
-        Isolate + Isolate -> Isolate
-
-    Therefore Remove always has priority over Isolate.
-
-    If there are enabled isolate regions:
-        Start by keeping the union of all isolate regions.
-
-    If there are no enabled isolate regions:
-        Start by keeping the entire spectrogram.
-
-    Then remove the union of all enabled remove regions.
-
-    Disabled regions are completely ignored.
+    Rules:
+        - Union of all enabled isolate regions = base keep (if any isolate exists)
+        - If no isolate regions: keep everything
+        - Then subtract union of all enabled remove regions
+        - Remove always has priority over isolate
     """
-
-    # Start with no regions selected.
     isolate_mask = np.zeros(shape, dtype=bool)
-    remove_mask = np.zeros(shape, dtype=bool)
-
+    remove_mask  = np.zeros(shape, dtype=bool)
     has_enabled_isolate = False
 
     for region in regions:
-        # Disabled regions do not participate in the final mask.
         if not region.get("enabled", True):
             continue
 
         mode = region.get("mode", "remove")
 
-        region_mask = build_region_mask(
-            shape=shape,
-            sr=sr,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            freq_range_hz=(
-                region["freq_min"],
-                region["freq_max"],
-            ),
-            time_range_sec=(
-                region["time_min"],
-                region["time_max"],
-            ),
-        )
+        # Support both polygon (vertices) and legacy rect regions
+        vertices = region.get("vertices", None)
 
-        if mode == "remove":
-            # Union of all remove regions.
-            remove_mask |= region_mask
-
-        elif mode == "isolate":
-            # Union of all isolate regions.
-            isolate_mask |= region_mask
-            has_enabled_isolate = True
-
+        if vertices is not None and len(vertices) >= 3:
+            region_mask = build_polygon_mask(
+                shape=shape,
+                sr=sr,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                vertices=vertices,
+            )
         else:
-            raise ValueError(
-                f"Unknown region mode '{mode}', "
-                "expected 'remove' or 'isolate'."
+            # Fallback to rect for legacy regions
+            region_mask = build_region_mask(
+                shape=shape,
+                sr=sr,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                freq_range_hz=(region["freq_min"], region["freq_max"]),
+                time_range_sec=(region["time_min"], region["time_max"]),
             )
 
-    # If at least one isolate region exists,
-    # only the union of isolate regions is initially kept.
-    #
-    # Otherwise, everything is initially kept.
+        if mode == "remove":
+            remove_mask |= region_mask
+        elif mode == "isolate":
+            isolate_mask |= region_mask
+            has_enabled_isolate = True
+        else:
+            raise ValueError(f"Unknown region mode '{mode}'.")
+
     if has_enabled_isolate:
         keep_mask = isolate_mask.copy()
     else:
         keep_mask = np.ones(shape, dtype=bool)
 
-    # Remove always has priority over isolate.
     keep_mask &= ~remove_mask
-
     return keep_mask
-
 
 def apply_mask(D: np.ndarray, keep_mask: np.ndarray) -> np.ndarray:
     """
