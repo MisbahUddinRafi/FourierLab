@@ -12,6 +12,11 @@ const state = {
     melFreqs: null,
     melMagnitudeDb: null,
 
+    // Filter & EQ state
+    filterBlocks: [],
+    selectedFilterBlockId: null,
+    lastFilter: null,
+
     // Lasso masking state
     maskRegions: [],
     selectedMaskRegionId: null,
@@ -341,6 +346,11 @@ function updatePlaybackCursor() {
     updatePlotPlayback("retainSpectrogram", currentTime);
     updatePlotPlayback("retainResultSpectrogram", currentTime);
 
+    updatePlotPlayback("filterOriginalSpectrogram", currentTime);
+    updatePlotPlayback("filterResultSpectrogram", currentTime);
+    updatePlotPlayback("filterOriginalWaveform", currentTime);
+    updatePlotPlayback("filterResultWaveform", currentTime);
+
     if (!player.paused && !player.ended) {
         playbackState.animationFrame = requestAnimationFrame(updatePlaybackCursor);
     } else {
@@ -544,6 +554,9 @@ function wirePlaybackTracking() {
 
         "retentionOriginalPlayer",
         "retainedPlayer",
+
+        "filterOriginalPlayer",
+        "filteredPlayer",
     ];
 
     playerIds.forEach(wirePlaybackPlayer);
@@ -582,6 +595,10 @@ function resetResults() {
         "retainSpectrogram",
         "retainResultSpectrogram",
         "sweepChart",
+        "filterOriginalSpectrogram",
+        "filterResultSpectrogram",
+        "filterOriginalWaveform",
+        "filterResultWaveform",
     ];
 
     plotIds.forEach((id) => {
@@ -611,6 +628,9 @@ function resetResults() {
 
         "retentionOriginalPlayer",
         "retainedPlayer",
+
+        "filterOriginalPlayer",
+        "filteredPlayer",
     ];
 
     playerIds.forEach((id) => {
@@ -626,6 +646,8 @@ function resetResults() {
     // Clear result readouts
     el("maskReadouts").innerHTML = "";
     el("retainReadout").innerHTML = "";
+    el("filterReadouts").innerHTML = "";
+    resetFilterBlocks();
     el("metricsBody").innerHTML = "";
 
     // Reset sidebar
@@ -1205,7 +1227,276 @@ function wireMaskRegionControls() {
 
 
 
+/* =========================================================
+   FILTER & EQ
+   ========================================================= */
 
+function getSelectedFilterBlock() {
+    return state.filterBlocks.find(b => b.id === state.selectedFilterBlockId) || null;
+}
+
+function selectFilterBlock(id) {
+    state.selectedFilterBlockId = id;
+    updateFilterBlockEditor();
+    updateFilterBlockDropdown();
+}
+
+function addFilterBlock() {
+    const nextId = state.filterBlocks.length > 0
+        ? Math.max(...state.filterBlocks.map(b => b.id)) + 1
+        : 1;
+
+    const block = {
+        id: nextId,
+        name: `Block ${nextId}`,
+        filter_type: "lowpass",
+        freq_min: 0,
+        freq_max: state.lastAnalyze ? state.sr / 2 : 11025,
+        time_min: 0,
+        time_max: null,
+        gain_db: 0,
+        enabled: true,
+    };
+
+    state.filterBlocks.push(block);
+    state.selectedFilterBlockId = block.id;
+    updateFilterBlockDropdown();
+    updateFilterBlockEditor();
+}
+
+function deleteSelectedFilterBlock() {
+    const block = getSelectedFilterBlock();
+    if (!block) return;
+
+    const idx = state.filterBlocks.findIndex(b => b.id === block.id);
+    state.filterBlocks.splice(idx, 1);
+
+    if (state.filterBlocks.length > 0) {
+        state.selectedFilterBlockId = state.filterBlocks[Math.min(idx, state.filterBlocks.length - 1)].id;
+    } else {
+        state.selectedFilterBlockId = null;
+    }
+
+    updateFilterBlockDropdown();
+    updateFilterBlockEditor();
+}
+
+function resetFilterBlocks() {
+    state.filterBlocks = [];
+    state.selectedFilterBlockId = null;
+    state.lastFilter = null;
+    updateFilterBlockDropdown();
+    updateFilterBlockEditor();
+}
+
+function updateFilterBlockDropdown() {
+    const menu = el("filterBlockDropdownMenu");
+    const label = el("filterBlockDropdownLabel");
+
+    const block = getSelectedFilterBlock();
+    if (label) label.textContent = block ? block.name : "No blocks";
+
+    if (!menu) return;
+
+    if (state.filterBlocks.length === 0) {
+        menu.innerHTML = `<div class="mask-region-empty">No blocks yet. Click + Add block to start.</div>`;
+        return;
+    }
+
+    menu.innerHTML = "";
+    state.filterBlocks.forEach((b, idx) => {
+        const row = document.createElement("div");
+        row.className = "mask-region-item" + (b.id === state.selectedFilterBlockId ? " selected" : "");
+        row.innerHTML = `
+            <span class="mask-region-item-label">${idx + 1}. ${b.name}</span>
+            <label class="mask-region-item-checkbox">
+                <input type="checkbox" ${b.enabled ? "checked" : ""} data-filter-enable="${b.id}">
+                <span>Enabled</span>
+            </label>
+        `;
+        row.addEventListener("click", (e) => {
+            if (e.target.matches('input[type="checkbox"]')) return;
+            selectFilterBlock(b.id);
+            closeFilterBlockDropdown();
+        });
+
+        const cb = row.querySelector(`[data-filter-enable="${b.id}"]`);
+        cb.addEventListener("change", (e) => {
+            b.enabled = e.target.checked;
+            updateFilterBlockEditor();
+        });
+
+        menu.appendChild(row);
+    });
+}
+
+function updateFilterBlockEditor() {
+    const block = getSelectedFilterBlock();
+    const editor = el("filterBlockEditor");
+    if (!editor) return;
+
+    if (!block) {
+        editor.classList.add("region-empty");
+        el("filterBlockName").value = "";
+        el("filterTypeSelect").value = "lowpass";
+        el("filterFreqMin").value = 0;
+        el("filterFreqMax").value = 11025;
+        el("filterTimeMin").value = 0;
+        el("filterTimeMax").value = "";
+        el("filterGainDb").value = 0;
+        el("filterBlockEnabled").checked = true;
+        el("filterBlockEnabled").disabled = true;
+        el("filterGainRow").style.display = "none";
+        return;
+    }
+
+    editor.classList.remove("region-empty");
+    el("filterBlockName").value = block.name;
+    el("filterTypeSelect").value = block.filter_type;
+    el("filterFreqMin").value = block.freq_min;
+    el("filterFreqMax").value = block.freq_max;
+    el("filterTimeMin").value = block.time_min;
+    el("filterTimeMax").value = block.time_max !== null ? block.time_max : "";
+    el("filterGainDb").value = block.gain_db;
+    el("filterBlockEnabled").checked = block.enabled;
+    el("filterBlockEnabled").disabled = false;
+    el("filterGainRow").style.display = block.filter_type === "custom_gain" ? "" : "none";
+}
+
+function openFilterBlockDropdown() {
+    el("filterBlockDropdown")?.classList.add("open");
+}
+
+function closeFilterBlockDropdown() {
+    el("filterBlockDropdown")?.classList.remove("open");
+}
+
+function wireFilterBlockControls() {
+    el("addFilterBlockBtn")?.addEventListener("click", addFilterBlock);
+    el("deleteFilterBlockBtn")?.addEventListener("click", deleteSelectedFilterBlock);
+
+    el("filterBlockDropdownBtn")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        el("filterBlockDropdown")?.classList.toggle("open");
+    });
+
+    document.addEventListener("click", (e) => {
+        const dd = el("filterBlockDropdown");
+        if (dd && !dd.contains(e.target)) closeFilterBlockDropdown();
+    });
+
+    // Live-sync all editor inputs back to the active block
+    const syncField = (inputId, prop, transform) => {
+        el(inputId)?.addEventListener("input", () => {
+            const block = getSelectedFilterBlock();
+            if (!block) return;
+            block[prop] = transform ? transform(el(inputId).value) : el(inputId).value;
+            if (prop === "name") updateFilterBlockDropdown();
+        });
+    };
+
+    syncField("filterBlockName", "name");
+    syncField("filterFreqMin", "freq_min", parseFloat);
+    syncField("filterFreqMax", "freq_max", parseFloat);
+    syncField("filterTimeMin", "time_min", parseFloat);
+    syncField("filterGainDb", "gain_db", parseFloat);
+
+    // time_max: blank → null (full duration)
+    el("filterTimeMax")?.addEventListener("input", () => {
+        const block = getSelectedFilterBlock();
+        if (!block) return;
+        const v = el("filterTimeMax").value.trim();
+        block.time_max = v === "" ? null : parseFloat(v);
+    });
+
+    // filter_type: also toggles the gain row
+    el("filterTypeSelect")?.addEventListener("change", () => {
+        const block = getSelectedFilterBlock();
+        if (!block) return;
+        block.filter_type = el("filterTypeSelect").value;
+        el("filterGainRow").style.display = block.filter_type === "custom_gain" ? "" : "none";
+    });
+
+    el("filterBlockEnabled")?.addEventListener("change", (e) => {
+        const block = getSelectedFilterBlock();
+        if (!block) return;
+        block.enabled = e.target.checked;
+        updateFilterBlockDropdown();
+    });
+}
+
+async function applyFilterChain() {
+    if (state.filterBlocks.length === 0) {
+        setStatus("Add at least one filter block first.", "error");
+        return;
+    }
+
+    const enabled = state.filterBlocks.filter(b => b.enabled);
+    if (enabled.length === 0) {
+        setStatus("Enable at least one filter block.", "error");
+        return;
+    }
+
+    try {
+        setBusy(true);
+        setStatus("Applying filter chain...");
+
+        const req = {
+            source: state.source,
+            sr: state.sr,
+            n_fft: state.n_fft,
+            hop_length: state.hop_length,
+            blocks: enabled.map(b => ({
+                id: b.id,
+                name: b.name,
+                filter_type: b.filter_type,
+                freq_min: b.freq_min,
+                freq_max: b.freq_max,
+                time_min: b.time_min,
+                time_max: b.time_max,
+                gain_db: b.gain_db,
+                enabled: true,
+            })),
+        };
+
+        const data = await apiPost_json("/audio/filter", req);
+        state.lastFilter = data;
+
+        const d = state.lastAnalyze;
+
+        renderSpectrogram("filterOriginalSpectrogram", data.freqs, data.times, data.magnitude_db_original, { selectable: false });
+        renderSpectrogram("filterResultSpectrogram", data.freqs, data.times, data.magnitude_db_filtered, { selectable: false });
+        renderWaveform("filterOriginalWaveform", data.waveform_original);
+        renderWaveform("filterResultWaveform", data.waveform_filtered);
+
+        const filteredPlayer = el("filteredPlayer");
+        filteredPlayer.src = "data:audio/wav;base64," + data.audio_base64;
+        filteredPlayer.load();
+
+        el("filterReadouts").innerHTML = `
+            <div class="readout">
+                <div class="readout-label">SNR</div>
+                <div class="readout-value">${fmt(data.snr_db, 2, " dB")}</div>
+            </div>
+            <div class="readout">
+                <div class="readout-label">MSE</div>
+                <div class="readout-value">${data.mse.toFixed(6)}</div>
+           </div>
+        `;
+
+        setStatus("Filter chain applied", "success");
+    } catch (err) {
+        setStatus(err.message, "error");
+    } finally {
+        setBusy(false);
+    }
+}
+
+async function saveFilterResult() {
+    if (!state.lastFilter) return;
+    downloadBase64Audio(state.lastFilter.audio_base64, "filtered.wav");
+    setStatus("Download started", "success");
+}
 
 
 /* ---------- main analyze flow ---------- */
@@ -1277,6 +1568,7 @@ function setAudioFromSource() {
         "phaseOriginalPlayer",
         "maskOriginalPlayer",
         "retentionOriginalPlayer",
+        "filterOriginalPlayer",
     ];
 
     playerIds.forEach((id) => {
@@ -1636,6 +1928,9 @@ window.addEventListener("DOMContentLoaded", () => {
     wireFreqToggle();
     wirePlaybackTracking();
     wireMaskRegionControls();
+    wireFilterBlockControls();
+    el("applyFilterBtn").addEventListener("click", applyFilterChain);
+    el("saveFilterBtn").addEventListener("click", saveFilterResult);
     wireRetentionResize();
     refreshLibrary();
 

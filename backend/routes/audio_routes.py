@@ -85,6 +85,92 @@ def waveform_envelope(y: np.ndarray, sr: int, n_buckets: int = 1200):
     }
 
 
+def apply_filter_block(
+    D: np.ndarray,
+    block: "FilterBlock",
+    sr: int,
+    n_fft: int,
+    hop_length: int,
+    duration: float,
+) -> np.ndarray:
+    """
+    Apply one filter block to an STFT matrix D (complex).
+    Returns a new STFT matrix with the filter applied.
+
+    All filters work by building a float gain mask (0.0 – 1.0 for
+    pass/stop filters, arbitrary positive for custom_gain) and
+    multiplying it into D.
+
+    A 2-bin cosine taper is applied at every cutoff edge to avoid
+    the ringing that a hard brick-wall cutoff produces.
+    """
+    n_freq_bins, n_frames = D.shape
+    freqs = frequency_axis(sr=sr, n_fft=n_fft)          # shape (n_freq_bins,)
+    times = time_axis(n_frames, sr=sr, hop_length=hop_length)  # shape (n_frames,)
+
+    t_max = block.time_max if block.time_max is not None else duration
+
+    # ---- time mask (which frames are affected) -------------------------
+    time_in = (times >= block.time_min) & (times <= t_max)  # shape (n_frames,)
+
+    # ---- frequency gain vector ----------------------------------------
+    freq_gain = np.ones(n_freq_bins, dtype=np.float64)
+
+    def taper(mask: np.ndarray) -> np.ndarray:
+        """
+        Smooth the edges of a 0/1 boolean freq mask with a cosine
+        taper over the 2 neighbouring bins on each transition.
+        """
+        gain = mask.astype(np.float64)
+        for i in range(1, len(gain)):
+            if gain[i] != gain[i - 1]:
+                # rising edge
+                if gain[i] > gain[i - 1]:
+                    if i + 1 < len(gain):
+                        gain[i] = 0.5 - 0.5 * np.cos(np.pi * 0.5)
+                # falling edge
+                else:
+                    gain[i - 1] = 0.5 - 0.5 * np.cos(np.pi * 0.5)
+        return gain
+
+    ft = block.filter_type
+
+    if ft == "lowpass":
+        pass_mask = freqs <= block.freq_max
+        freq_gain = taper(pass_mask)
+
+    elif ft == "highpass":
+        pass_mask = freqs >= block.freq_min
+        freq_gain = taper(pass_mask)
+
+    elif ft == "bandpass":
+        pass_mask = (freqs >= block.freq_min) & (freqs <= block.freq_max)
+        freq_gain = taper(pass_mask)
+
+    elif ft == "notch":
+        # Notch = inverse of bandpass: attenuate the band, keep the rest
+        stop_mask = (freqs >= block.freq_min) & (freqs <= block.freq_max)
+        freq_gain = taper(~stop_mask)
+
+    elif ft == "custom_gain":
+        region_mask = (freqs >= block.freq_min) & (freqs <= block.freq_max)
+        linear_gain = 10.0 ** (block.gain_db / 20.0)
+        freq_gain[region_mask] = linear_gain
+
+    else:
+        raise HTTPException(400, f"Unknown filter_type '{ft}'.")
+
+    # ---- build 2-D gain matrix and apply ------------------------------
+    # freq_gain: (n_freq_bins,)  →  column vector
+    # time_in:   (n_frames,)     →  row vector
+    # combined:  (n_freq_bins, n_frames)
+    gain_matrix = np.outer(freq_gain, time_in.astype(np.float64))
+
+    # Bins outside the time range keep gain = 1.0
+    gain_matrix += np.outer(np.ones(n_freq_bins), (~time_in).astype(np.float64))
+
+    return D * gain_matrix
+
 class AnalyzeRequest(BaseModel):
     source: str
     sr: int = 22050
@@ -128,6 +214,21 @@ class SweepRequest(AnalyzeRequest):
 class SaveRequest(BaseModel):
     audio_base64: str
     label: str = "result"
+
+class FilterBlock(BaseModel):
+    id: int
+    name: str = ""
+    filter_type: str        # "lowpass" | "highpass" | "bandpass" | "notch" | "custom_gain"
+    freq_min: float = 0.0
+    freq_max: float = 11025.0
+    time_min: float = 0.0
+    time_max: float | None = None   # None = full duration
+    gain_db: float = 0.0            # used by custom_gain; ignored by pass filters
+    enabled: bool = True
+
+
+class FilterRequest(AnalyzeRequest):
+    blocks: list[FilterBlock]
 
 
 @router.post("/upload")
@@ -427,3 +528,52 @@ def save_result(req: SaveRequest):
     filename = f"{safe_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
     (SAVED_DIR / filename).write_bytes(audio_bytes)
     return {"filename": filename}
+
+
+
+@router.post("/filter")
+def filter_audio(req: FilterRequest):
+    if not req.blocks:
+        raise HTTPException(400, "At least one filter block is required.")
+
+    path = resolve_source(req.source)
+    y, sr = load_audio(str(path), target_sr=req.sr, mono=True)
+    duration = len(y) / sr
+
+    D = compute_stft(y, n_fft=req.n_fft, hop_length=req.hop_length, win_length=req.n_fft)
+    magnitude_orig, _ = magnitude_phase(D)
+
+    # Chain: apply each enabled block in order
+    D_filtered = D.copy()
+    for block in req.blocks:
+        if not block.enabled:
+            continue
+        D_filtered = apply_filter_block(
+            D_filtered, block, sr, req.n_fft, req.hop_length, duration
+        )
+
+    y_filtered = compute_istft(D_filtered, req.hop_length, req.n_fft, length=len(y))
+
+    magnitude_filtered = np.abs(D_filtered)
+    magnitude_db_filtered = magnitude_to_db(
+        magnitude_filtered,
+        ref=np.max(magnitude_orig) + 1e-12,
+    )
+
+    freqs = frequency_axis(sr=sr, n_fft=req.n_fft)
+    times = time_axis(D.shape[1], sr=sr, hop_length=req.hop_length)
+
+    audio_b64 = base64.b64encode(waveform_to_wav_bytes(y_filtered, sr)).decode("ascii")
+
+    return {
+        "audio_base64": audio_b64,
+        "waveform_original": waveform_envelope(y, sr),
+        "waveform_filtered": waveform_envelope(y_filtered, sr),
+        "freqs": np.round(freqs, 1).tolist(),
+        "times": np.round(times, 4).tolist(),
+        "magnitude_db_original": np.round(magnitude_to_db(magnitude_orig), 1).tolist(),
+        "magnitude_db_filtered": np.round(magnitude_db_filtered, 1).tolist(),
+        "snr_db": sanitize_metric(snr_db(y, y_filtered)),
+        "mse": sanitize_metric(mse(y, y_filtered)),
+        "duration": round(duration, 3),
+    }
