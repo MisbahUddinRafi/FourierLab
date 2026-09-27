@@ -669,59 +669,19 @@ audio { width: 100%; height: 36px; }
    Audio Lab - Retention plot layout
    ========================================================= */
 
+
 .retention-plots {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-direction: column;
     gap: 20px;
     width: 100%;
-    align-items: start;
 }
 
 .retention-plot-card {
-    min-width: 0;
     width: 100%;
+    min-width: 0;
     overflow: hidden;
 }
-
-.retention-plot-card > div:last-child {
-    width: 100% !important;
-    min-width: 0;
-    max-width: 100%;
-}
-
-.retention-plot-card .js-plotly-plot,
-.retention-plot-card .plot-container,
-.retention-plot-card .svg-container {
-    width: 100% !important;
-    max-width: 100%;
-}
-
-
-/* Prevent Plotly from overflowing its card */
-.retention-plot-card .js-plotly-plot,
-.retention-plot-card .plot-container,
-.retention-plot-card .svg-container {
-    max-width: 100%;
-}
-
-
-/* Smaller screens: stack retention plots */
-@media (max-width: 900px) {
-    .retention-plots {
-        grid-template-columns: 1fr;
-    }
-
-    .component-player-row {
-        flex-wrap: wrap;
-    }
-
-    .component-player-row .component-action {
-        min-width: 100%;
-    }
-}
-
-
-
 
 /* ================================
    RETENTION CONTROLS
@@ -732,7 +692,6 @@ audio { width: 100%; height: 36px; }
     margin-bottom: 24px;
 }
 
-/* Strategy + fraction row */
 .retention-settings {
     display: grid;
     grid-template-columns: minmax(260px, 0.8fr) minmax(300px, 1.5fr);
@@ -741,7 +700,6 @@ audio { width: 100%; height: 36px; }
     align-items: end;
 }
 
-/* Make fields fill their grid cells */
 .retention-settings .field {
     width: 100%;
     min-width: 0;
@@ -752,7 +710,6 @@ audio { width: 100%; height: 36px; }
     width: 100%;
 }
 
-/* Buttons row */
 .retention-actions {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -764,22 +721,6 @@ audio { width: 100%; height: 36px; }
 .retention-actions .btn {
     width: 100%;
     justify-content: center;
-}
-
-
-/* Responsive */
-@media (max-width: 800px) {
-
-    .retention-settings {
-        grid-template-columns: 1fr;
-        gap: 16px;
-    }
-
-    .retention-actions {
-        grid-template-columns: 1fr;
-        gap: 12px;
-    }
-
 }
 
 

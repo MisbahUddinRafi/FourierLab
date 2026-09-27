@@ -403,18 +403,47 @@ function renderWaveform(containerId, waveform) {
 }
 
 function renderSpectrogram(containerId, freqs, times, magnitude_db) {
+    let zMax = -Infinity;
+    let zRawMin = Infinity;
+    for (let i = 0; i < magnitude_db.length; i++) {
+        for (let j = 0; j < magnitude_db[i].length; j++) {
+            const v = magnitude_db[i][j];
+            if (v > zMax) zMax = v;
+            if (v < zRawMin) zRawMin = v;
+        }
+    }
+    const zMin = Math.max(zRawMin, zMax - 80);
+
     const trace = {
         x: times,
         y: freqs,
         z: magnitude_db,
         type: "heatmap",
-        colorscale: MAGNITUDE_COLORSCALE,
+        colorscale: "Inferno",
         zsmooth: "best",
-        colorbar: { title: "dB", titleside: "right", tickfont: { size: 10 }, thickness: 12 },
+        zmin: zMin,
+        zmax: zMax,
+        colorbar: {
+            title: "dB",
+            titleside: "right",
+            tickfont: { size: 10 },
+            thickness: 12,
+            tickvals: [zMin, (zMin + zMax) / 2, zMax],
+            ticktext: [
+                `${Math.round(zMin)} dB`,
+                `${Math.round((zMin + zMax) / 2)} dB`,
+                `${Math.round(zMax)} dB`,
+            ],
+        },
     };
+
     const layout = baseLayout({
         xaxis: { title: "Time (s)" },
-        yaxis: { title: "Frequency (Hz)" },
+        yaxis: {
+            title: "Frequency (Hz)",
+            type: "linear",
+            autorange: true,
+        },
         height: 260,
     });
 

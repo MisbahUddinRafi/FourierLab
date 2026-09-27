@@ -15,6 +15,7 @@ from audio_core.stft_engine import (
     magnitude_to_db,
     frequency_axis,
     time_axis,
+    compute_mel_spectrogram, 
 )
 from audio_core.masking import (
     build_time_freq_mask,
@@ -171,6 +172,13 @@ def analyze(req: AnalyzeRequest):
     freqs = frequency_axis(sr=sr, n_fft=req.n_fft)
     times = time_axis(D.shape[1], sr=sr, hop_length=req.hop_length)
 
+    # Mel spectrogram
+    from audio_core.stft_engine import compute_mel_spectrogram
+    mel_freqs, mel_magnitude_db = compute_mel_spectrogram(
+        magnitude, sr=sr, n_fft=req.n_fft, n_mels=128,
+        fmin=20.0, fmax=sr / 2,
+    )
+
     return {
         "sr": sr,
         "duration": round(len(y) / sr, 3),
@@ -179,8 +187,10 @@ def analyze(req: AnalyzeRequest):
         "times": np.round(times, 4).tolist(),
         "magnitude_db": np.round(magnitude_db, 1).tolist(),
         "phase": np.round(phase, 3).tolist(),
+        # Mel
+        "mel_freqs": np.round(mel_freqs, 1).tolist(),
+        "mel_magnitude_db": np.round(mel_magnitude_db, 1).tolist(),
     }
-
 
 @router.post("/component")
 def reconstruct_component(req: ComponentRequest):

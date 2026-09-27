@@ -9,6 +9,8 @@ const state = {
     lastMask: null,
     lastRetain: null,
     freqScale: "linear",
+    melFreqs: null,
+    melMagnitudeDb: null,
 
     // ---------------------------------------------------------
     // Interactive masking state
@@ -160,182 +162,118 @@ function renderSpectrogram(
     freqs,
     times,
     magnitude_db,
-    options = {}
+    options = {},
+    mel_freqs = null,
+    mel_magnitude_db = null,
 ) {
+    // Always use linear STFT data — Mel y-axis causes distortion in Plotly heatmap
+    const yData = freqs;
+    const zData = magnitude_db;
+
+    // Safe dB range computation — no spread operator
+    let zMax = -Infinity;
+    let zRawMin = Infinity;
+    for (let i = 0; i < zData.length; i++) {
+        for (let j = 0; j < zData[i].length; j++) {
+            const v = zData[i][j];
+            if (v > zMax) zMax = v;
+            if (v < zRawMin) zRawMin = v;
+        }
+    }
+    const zMin = Math.max(zRawMin, zMax - 80);
+
     const trace = {
         x: times,
-        y: freqs,
-        z: magnitude_db,
-
+        y: yData,
+        z: zData,
         type: "heatmap",
-
-        colorscale:
-            options.colorscale || MAGNITUDE_COLORSCALE,
-
+        colorscale: "Inferno",
         zsmooth: "best",
-
+        zmin: zMin,
+        zmax: zMax,
         colorbar: {
             title: options.colorbarTitle || "dB",
             titleside: "right",
-            tickfont: {
-                size: 10,
-            },
+            tickfont: { size: 10 },
             thickness: 12,
+            tickvals: [zMin, (zMin + zMax) / 2, zMax],
+            ticktext: [
+                `${Math.round(zMin)} dB`,
+                `${Math.round((zMin + zMax) / 2)} dB`,
+                `${Math.round(zMax)} dB`,
+            ],
         },
     };
 
-
-    const isMaskPlot =
-        containerId === "maskSpectrogram";
-
+    const isMaskPlot = containerId === "maskSpectrogram";
 
     let dragmode = "zoom";
+    if (isMaskPlot) dragmode = "false";
+    else if (options.selectable) dragmode = "select";
 
-    if (isMaskPlot) {
-        dragmode = "false";
-    } else if (options.selectable) {
-        dragmode = "select";
-    }
-
-
-    const layout = baseLayout({
-
+    const layout = {
+        paper_bgcolor: "transparent",
+        plot_bgcolor: "transparent",
+        font: { family: "IBM Plex Mono, monospace", color: "#8CA0BE", size: 11 },
+        margin: { l: 55, r: 20, t: 10, b: 40 },
         xaxis: {
             title: "Time (s)",
+            gridcolor: "#1C2A44",
+            zerolinecolor: "#1C2A44",
         },
-
         yaxis: {
             title: "Frequency (Hz)",
-            type: state.freqScale,
+            type: state.freqScale,      // respects linear/log toggle
+            range: state.freqScale === "log"
+                ? [Math.log10(Math.max(freqs[1] || 1, 20)), Math.log10(freqs[freqs.length - 1])]
+                : [freqs[0], freqs[freqs.length - 1]],
+            gridcolor: "#1C2A44",
+            zerolinecolor: "#1C2A44",
         },
-
         height: 320,
-
         dragmode,
-
-        /*
-         * Allows clicks anywhere in the plotting area.
-         * We do not rely on this for shape selection itself;
-         * the masking system also listens directly to the
-         * SVG shape layer.
-         */
         clickmode: "event",
-
         clickanywhere: true,
-
-        /*
-         * Styling for Plotly-created rectangles.
-         */
         newshape: {
             type: "rect",
-
-            line: {
-                color: "#F5A623",
-                width: 2,
-            },
-
+            line: { color: "#F5A623", width: 2 },
             fillcolor: "rgba(245, 166, 35, 0.10)",
-
             opacity: 0.32,
-
             layer: "above",
         },
-
-        /*
-         * Avoid Plotly's default bright-magenta active shape.
-         */
         activeshape: {
             fillcolor: "rgba(245, 166, 35, 0.12)",
             opacity: 0.55,
         },
-
-        /*
-         * Keep shape edits stable while the user interacts.
-         */
         editrevision: "mask-regions",
-    });
-
+    };
 
     const config = {
         displayModeBar: true,
-
         responsive: true,
-
-        modeBarButtonsToRemove: [
-            "lasso2d",
-        ],
-
-        /*
-         * Only expose drawrect for the masking plot.
-         * The actual interaction mode is controlled by our
-         * Edit/Add buttons.
-         */
+        modeBarButtonsToRemove: ["lasso2d"],
         modeBarButtonsToAdd: [],
     };
 
-
-    Plotly.newPlot(
-        containerId,
-        [trace],
-        layout,
-        config
-    ).then(() => {
-
-        if (
-            playbackState.activePlayer
-        ) {
-            updatePlotPlayback(
-                containerId,
-                playbackState.activePlayer.currentTime || 0
-            );
+    Plotly.newPlot(containerId, [trace], layout, config).then(() => {
+        if (playbackState.activePlayer) {
+            updatePlotPlayback(containerId, playbackState.activePlayer.currentTime || 0);
         }
-
 
         if (isMaskPlot) {
-
             attachMaskShapeClickHandler();
-
-            const plot =
-                el("maskSpectrogram");
-
-            plot.on(
-                "plotly_relayout",
-                handleMaskRelayout
-            );
-
-            /*
-             * Initial region state.
-             */
+            const plot = el("maskSpectrogram");
+            plot.on("plotly_relayout", handleMaskRelayout);
             renderMaskRegionShapes();
-
-            setMaskInteractionMode(
-                state.maskInteractionMode
-            );
+            setMaskInteractionMode(state.maskInteractionMode);
         }
 
-
         if (options.onSelect) {
-
-            const plot =
-                document.getElementById(containerId);
-
-            plot.on(
-                "plotly_selected",
-                (evt) => {
-
-                    if (
-                        !evt ||
-                        !evt.range
-                    ) {
-                        return;
-                    }
-
-                    options.onSelect(
-                        evt.range.x,
-                        evt.range.y
-                    );
-                }
-            );
+            const plot = document.getElementById(containerId);
+            plot.on("plotly_selected", (evt) => {
+                if (!evt || !evt.range) return;
+                options.onSelect(evt.range.x, evt.range.y);
+            });
         }
     });
 }
@@ -1960,27 +1898,20 @@ async function runAnalyze() {
         });
 
         state.lastAnalyze = data;
+        state.melFreqs = data.mel_freqs || null;
+        state.melMagnitudeDb = data.mel_magnitude_db || null;
         state.duration = data.duration;
 
         renderWaveform("waveformPlot", data.waveform);
-        renderSpectrogram("overviewSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false });
-        renderSpectrogram("magSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false });
+        renderSpectrogram("overviewSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false }, data.mel_freqs, data.mel_magnitude_db);
+        renderSpectrogram("magSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false }, data.mel_freqs, data.mel_magnitude_db);
         renderPhase("phasePlot", data.freqs, data.times, data.phase);
-        renderSpectrogram(
-            "maskSpectrogram",
-            data.freqs,
-            data.times,
-            data.magnitude_db,
-            {
-                selectable: false,
-            }
-        );
-
-        renderSpectrogram("retainSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false });
-        requestAnimationFrame(() => {
-            const p1 = el("retainSpectrogram");
-            if (p1 && p1.data) Plotly.Plots.resize(p1);
-        });
+        renderSpectrogram("maskSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false }, data.mel_freqs, data.mel_magnitude_db);
+        renderSpectrogram("retainSpectrogram", data.freqs, data.times, data.magnitude_db, { selectable: false }, state.melFreqs, state.melMagnitudeDb);
+        setTimeout(() => {
+            const p = el("retainSpectrogram");
+            if (p && p.data) Plotly.Plots.resize(p);
+        }, 100);
 
         setAudioFromSource();
 
@@ -2140,19 +2071,7 @@ async function applyMask() {
         state.lastMask = data;
 
 
-        renderSpectrogram(
-            "maskResultSpectrogram",
-
-            state.lastAnalyze.freqs,
-
-            state.lastAnalyze.times,
-
-            data.magnitude_db,
-
-            {
-                selectable: false,
-            }
-        );
+        renderSpectrogram("maskResultSpectrogram", state.lastAnalyze.freqs, state.lastAnalyze.times, data.magnitude_db, { selectable: false });
 
 
         const maskedPlayer =
@@ -2281,6 +2200,10 @@ async function applyRetention() {
         state.lastRetain = data;
 
         renderSpectrogram("retainResultSpectrogram", state.lastAnalyze.freqs, state.lastAnalyze.times, data.magnitude_db, { selectable: false });
+        setTimeout(() => {
+            const p = el("retainResultSpectrogram");
+            if (p && p.data) Plotly.Plots.resize(p);
+        }, 100);
         requestAnimationFrame(() => {
             const p2 = el("retainResultSpectrogram");
             if (p2 && p2.data) Plotly.Plots.resize(p2);
@@ -2344,9 +2267,9 @@ function wireFreqToggle() {
                 state.freqScale = btn.dataset.scale;
                 if (state.lastAnalyze) {
                     const d = state.lastAnalyze;
-                    renderSpectrogram("overviewSpectrogram", d.freqs, d.times, d.magnitude_db, { selectable: false });
-                    renderSpectrogram("magSpectrogram", d.freqs, d.times, d.magnitude_db, { selectable: false });
-                    renderPhase("phasePlot", d.freqs, d.times, d.phase);
+                    renderSpectrogram("overviewSpectrogram", d.freqs, d.times, d.magnitude_db, { selectable: false }, state.melFreqs, state.melMagnitudeDb);
+                    renderSpectrogram("magSpectrogram", d.freqs, d.times, d.magnitude_db, { selectable: false }, state.melFreqs, state.melMagnitudeDb);
+                    renderPhase("phasePlot", d.freqs, d.times, d.phase);  // phase stays linear, no change
                 }
             });
         });
@@ -2470,6 +2393,7 @@ window.addEventListener("DOMContentLoaded", () => {
     wireFreqToggle();
     wirePlaybackTracking();
     wireMaskRegionControls();
+    wireRetentionResize();
     refreshLibrary();
 
     el("analyzeBtn").addEventListener("click", runAnalyze);
