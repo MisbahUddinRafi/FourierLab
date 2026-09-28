@@ -14,6 +14,17 @@ const state = {
     lastRetain: null,
     lastSweep: null,
     activeTab: "tabOverview",
+
+    // K-space lasso masking
+    kspaceLasso: {
+        canvas: null,
+        ctx: null,
+        pixelPath: [],
+        vertices: [],
+        isDrawing: false,
+        mouseDown: false,
+        enabled: false,
+    },
 };
 
 function el(id) {
@@ -46,9 +57,9 @@ function b64Src(b64) {
    ========================================================= */
 
 const CMAPS = {
-    viridis:  "linear-gradient(to right,#440154,#3b528b,#21918c,#5ec962,#fde725)",
-    inferno:  "linear-gradient(to right,#000004,#420a68,#932667,#dd513a,#fca50a,#fcffa4)",
-    rdylgn:   "linear-gradient(to right,#a50026,#f46d43,#fee08b,#a6d96a,#006837)",
+    viridis: "linear-gradient(to right,#440154,#3b528b,#21918c,#5ec962,#fde725)",
+    inferno: "linear-gradient(to right,#000004,#420a68,#932667,#dd513a,#fca50a,#fcffa4)",
+    rdylgn: "linear-gradient(to right,#a50026,#f46d43,#fee08b,#a6d96a,#006837)",
     twilight: "linear-gradient(to right,#e2d9e2,#6a7fc0,#2f1437,#c47a68,#e2d9e2)",
 };
 
@@ -196,6 +207,17 @@ async function handleAnalyze() {
     try {
         await resolveSource();
 
+        clearKspaceLasso();
+
+        const oldCanvas = el("kspaceLassoCanvas");
+        if (oldCanvas) {
+            oldCanvas.remove();
+        }
+
+        state.kspaceLasso.canvas = null;
+        state.kspaceLasso.ctx = null;
+        state.kspaceLasso.enabled = false;
+        
         const resolution = parseInt(el("resolutionSelect").value, 10) || 160;
         const phaseStrength = parseFloat(el("phaseStrengthSlider").value) || 0.6;
         state.resolution = resolution;
@@ -210,10 +232,24 @@ async function handleAnalyze() {
         });
 
         state.lastAnalyze = data;
+        state.lastMask = null;
 
         // Display lab body and hide empty state
         el("emptyState").style.display = "none";
         el("labBody").style.display = "block";
+
+        // Seed the masking comparison with the unmasked source images.
+        el("maskOriginalKspaceImg").src = b64Src(data.kspace_mag_b64);
+        el("maskOverlayImg").src = b64Src(data.kspace_mag_b64);
+        el("maskReconImg").src = b64Src(data.original_b64);
+        el("maskErrorImg").removeAttribute("src");
+        el("maskErrorImg").hidden = true;
+        el("maskErrorPlaceholder").hidden = false;
+        el("maskRetainedBadge").textContent = "Not applied";
+        el("maskReadouts").innerHTML = "";
+        el("metricsReadouts").innerHTML = "";
+        el("metricsErrorImg").removeAttribute("src");
+        el("metricsSsimImg").removeAttribute("src");
 
         // Tab 1: Overview
         el("overviewOriginalImg").src = b64Src(data.original_b64);
@@ -245,9 +281,8 @@ async function handleAnalyze() {
             </div>
         `;
 
-        // Automatically compute default isolated reconstructions and masking
+        // Compute the component and retention views; masking stays user-triggered.
         await handleGenComponents(true);
-        await handleApplyMask(true);
         await handleApplyRetention(true);
 
     } catch (err) {
@@ -280,17 +315,16 @@ async function handleGenComponents(silent = false) {
 
 async function handleApplyMask(silent = false) {
     if (!state.lastAnalyze) return;
+
     try {
         if (!silent) setBusy(true);
 
         const maskType = el("maskTypeSelect").value;
-        const mode = document.querySelector('input[name="maskModeRadio"]:checked').value;
-        const radius = parseFloat(el("maskRadiusSlider").value);
+        const mode = document.querySelector(
+            'input[name="maskModeRadio"]:checked'
+        ).value;
 
-        const kxMin = parseFloat(el("kxMinSlider").value);
-        const kxMax = parseFloat(el("kxMaxSlider").value);
-        const kyMin = parseFloat(el("kyMinSlider").value);
-        const kyMax = parseFloat(el("kyMaxSlider").value);
+        const radius = parseFloat(el("maskRadiusSlider").value);
 
         const req = {
             source: state.source,
@@ -299,63 +333,681 @@ async function handleApplyMask(silent = false) {
             mask_type: maskType,
             mode: mode,
             radius: radius,
-            kx_min: kxMin,
-            kx_max: kxMax,
-            ky_min: kyMin,
-            ky_max: kyMax,
+
+            // Existing rectangular custom-mask values
+            kx_min: parseFloat(el("kxMinSlider").value),
+            kx_max: parseFloat(el("kxMaxSlider").value),
+            ky_min: parseFloat(el("kyMinSlider").value),
+            ky_max: parseFloat(el("kyMaxSlider").value),
+
+            // New polygon/lasso mask
+            lasso_vertices: null,
         };
 
+        /*
+         * When Custom Lasso is selected, send the polygon instead
+         * of the rectangular slider coordinates.
+         */
+        if (maskType === "custom_lasso") {
+            const vertices = state.kspaceLasso.vertices;
+
+            if (!vertices || vertices.length < 3) {
+                throw new Error("Draw a k-space region first.");
+            }
+
+            req.lasso_vertices = vertices.map((v) => ({
+                kx: Number(v.kx),
+                ky: Number(v.ky),
+            }));
+        }
+
+        setStatus("Applying k-space mask...");
+
         const data = await apiPost_json("/image/mask", req);
+
         state.lastMask = data;
 
-        // Update visuals
         el("maskOverlayImg").src = b64Src(data.mask_overlay_b64);
+        if (maskType === "custom_lasso") {
+            const img = el("maskOverlayImg");
+
+            img.onload = () => {
+                requestAnimationFrame(() => {
+                    initKspaceLassoCanvas();
+                    wireKspaceLassoEvents();
+                    drawKspaceLassoRegions();
+                });
+            };
+        }
         el("maskReconImg").src = b64Src(data.recon_b64);
         el("maskErrorImg").src = b64Src(data.error_heatmap_b64);
-        setColorbar("maskOverlayImg", "viridis", "low", "high");
-        setColorbar("maskErrorImg", "inferno", "0", (data.error_max ?? 0).toFixed(3));
+        el("maskErrorImg").hidden = false;
+        el("maskErrorPlaceholder").hidden = true;
 
-        el("maskRetainedBadge").textContent = `${data.retained_pct.toFixed(1)}% kept`;
+        setColorbar(
+            "maskOverlayImg",
+            "viridis",
+            "low",
+            "high"
+        );
 
-        // Update readouts
+        setColorbar(
+            "maskErrorImg",
+            "inferno",
+            "0",
+            (data.error_max ?? 0).toFixed(3)
+        );
+
+        el("maskRetainedBadge").textContent =
+            `${data.retained_pct.toFixed(1)}% kept`;
+
         el("maskReadouts").innerHTML = [
-            readoutHtml("k-Space Retained", `${data.retained_pct.toFixed(1)}%`),
-            readoutHtml("PSNR", fmt(data.psnr, 2, " dB")),
-            readoutHtml("SSIM", fmt(data.ssim, 4)),
-            readoutHtml("MSE", fmt(data.mse, 6)),
+            readoutHtml(
+                "k-Space Retained",
+                `${data.retained_pct.toFixed(1)}%`
+            ),
+            readoutHtml(
+                "PSNR",
+                fmt(data.psnr, 2, " dB")
+            ),
+            readoutHtml(
+                "SSIM",
+                fmt(data.ssim, 4)
+            ),
+            readoutHtml(
+                "MSE",
+                fmt(data.mse, 6)
+            ),
         ].join("");
 
-        // Also update Metrics tab with this latest mask result
         updateMetricsTab(data);
 
-        // Update tip text dynamically
         updateMaskTip(maskType, mode);
 
     } catch (err) {
-        if (!silent) alert("Masking error: " + err.message);
+        if (!silent) {
+            alert("Masking error: " + err.message);
+        }
+        setStatus("Masking error: " + err.message);
     } finally {
         if (!silent) setBusy(false);
     }
 }
 
+function handleResetMask() {
+    const analysis = state.lastAnalyze;
+    if (!analysis) return;
+
+    state.lastMask = null;
+    state.kspaceLasso.enabled = false;
+    clearKspaceLasso();
+
+    const lassoButton = el("kspaceLassoBtn");
+    if (lassoButton) {
+        lassoButton.textContent = "Draw Custom Region";
+        lassoButton.classList.remove("active");
+    }
+
+    el("maskOverlayImg").src = b64Src(analysis.kspace_mag_b64);
+    el("maskReconImg").src = b64Src(analysis.original_b64);
+    el("maskErrorImg").removeAttribute("src");
+    el("maskErrorImg").hidden = true;
+    el("maskErrorPlaceholder").hidden = false;
+    el("maskRetainedBadge").textContent = "Not applied";
+    el("maskReadouts").innerHTML = "";
+    el("metricsReadouts").innerHTML = "";
+    el("metricsErrorImg").removeAttribute("src");
+    el("metricsSsimImg").removeAttribute("src");
+
+    setStatus("Mask reset to original k-space.", "loaded");
+}
+
+
+/* =========================================================
+   K-SPACE LASSO MASKING
+   ========================================================= */
+
+function getKspaceLassoPlot() {
+    const img = el("maskOverlayImg");
+    if (!img) return null;
+
+    const container = img.parentElement;
+    if (!container) return null;
+
+    return {
+        img,
+        container,
+    };
+}
+
+
+function initKspaceLassoCanvas() {
+    const target = getKspaceLassoPlot();
+    if (!target) return;
+
+    const { img, container } = target;
+
+    const old = el("kspaceLassoCanvas");
+    if (old) old.remove();
+
+    /*
+     * The overlay follows the actual displayed image.
+     * This means the lasso stays aligned when the image
+     * scales responsively.
+     */
+    const rect = img.getBoundingClientRect();
+
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    const canvas = document.createElement("canvas");
+    canvas.id = "kspaceLassoCanvas";
+
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+
+    canvas.style.cssText = `
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 20;
+        pointer-events: auto;
+        cursor: crosshair;
+        border-radius: inherit;
+    `;
+
+    /*
+     * The parent must be positioned so the canvas sits
+     * exactly on top of the k-space image.
+     */
+    const computedPosition =
+        window.getComputedStyle(container).position;
+
+    if (computedPosition === "static") {
+        container.style.position = "relative";
+    }
+
+    container.appendChild(canvas);
+
+    const ctx = canvas.getContext("2d");
+
+    /*
+     * Draw using CSS-pixel coordinates rather than physical
+     * canvas pixels.
+     */
+    ctx.scale(dpr, dpr);
+
+    state.kspaceLasso.canvas = canvas;
+    state.kspaceLasso.ctx = ctx;
+
+    resizeKspaceLassoCanvas();
+
+    drawKspaceLassoRegions();
+}
+
+
+function resizeKspaceLassoCanvas() {
+    const canvas = state.kspaceLasso.canvas;
+
+    if (!canvas) return;
+
+    const target = getKspaceLassoPlot();
+    if (!target) return;
+
+    const rect = target.img.getBoundingClientRect();
+
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+
+    const ctx = canvas.getContext("2d");
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    state.kspaceLasso.ctx = ctx;
+
+    drawKspaceLassoRegions();
+}
+
+
+function kspacePixelToData(x, y) {
+    const target = getKspaceLassoPlot();
+
+    if (!target) return null;
+
+    const rect = target.img.getBoundingClientRect();
+
+    if (!rect.width || !rect.height) return null;
+
+    /*
+     * Convert image pixels to normalized k-space coordinates.
+     *
+     * Center = (0, 0)
+     *
+     * Left  = -0.5
+     * Right = +0.5
+     * Top   = -0.5
+     * Bottom= +0.5
+     */
+    const kx = (x / rect.width) - 0.5;
+    const ky = (y / rect.height) - 0.5;
+
+    return {
+        kx,
+        ky,
+    };
+}
+
+
+function kspaceDataToPixel(kx, ky) {
+    const target = getKspaceLassoPlot();
+
+    if (!target) return null;
+
+    const rect = target.img.getBoundingClientRect();
+
+    return {
+        x: (kx + 0.5) * rect.width,
+        y: (ky + 0.5) * rect.height,
+    };
+}
+
+
+function getKspaceMousePosition(event) {
+    const target = getKspaceLassoPlot();
+
+    if (!target) return null;
+
+    const rect = target.img.getBoundingClientRect();
+
+    return {
+        x: Math.max(
+            0,
+            Math.min(rect.width, event.clientX - rect.left)
+        ),
+        y: Math.max(
+            0,
+            Math.min(rect.height, event.clientY - rect.top)
+        ),
+    };
+}
+
+
+function drawCurrentKspaceLasso() {
+    const ctx = state.kspaceLasso.ctx;
+    const canvas = state.kspaceLasso.canvas;
+
+    if (!ctx || !canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    const path = state.kspaceLasso.pixelPath;
+
+    if (path.length < 2) return;
+
+    ctx.beginPath();
+
+    ctx.moveTo(path[0].x, path[0].y);
+
+    for (let i = 1; i < path.length; i++) {
+        ctx.lineTo(path[i].x, path[i].y);
+    }
+
+    ctx.closePath();
+
+    ctx.fillStyle = "rgba(245, 166, 35, 0.15)";
+    ctx.fill();
+
+    ctx.strokeStyle = "#F5A623";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+
+    /*
+     * Start point
+     */
+    ctx.beginPath();
+    ctx.arc(
+        path[0].x,
+        path[0].y,
+        5,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fillStyle = "#F5A623";
+    ctx.fill();
+}
+
+
+function drawKspaceLassoRegions() {
+    const ctx = state.kspaceLasso.ctx;
+    const canvas = state.kspaceLasso.canvas;
+
+    if (!ctx || !canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    /*
+     * Only one custom lasso region is used for Image Lab.
+     * This intentionally keeps the feature simple.
+     */
+    const vertices = state.kspaceLasso.vertices;
+
+    if (!vertices || vertices.length < 3) return;
+
+    const pixels = vertices
+        .map(v => kspaceDataToPixel(v.kx, v.ky))
+        .filter(Boolean);
+
+    if (pixels.length < 3) return;
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        pixels[0].x,
+        pixels[0].y
+    );
+
+    for (let i = 1; i < pixels.length; i++) {
+        ctx.lineTo(
+            pixels[i].x,
+            pixels[i].y
+        );
+    }
+
+    ctx.closePath();
+
+    /*
+     * Fill
+     */
+    ctx.fillStyle = "rgba(199, 146, 234, 0.18)";
+    ctx.fill();
+
+    /*
+     * Dark halo
+     */
+    ctx.strokeStyle = "rgba(6, 10, 20, 0.9)";
+    ctx.lineWidth = 5;
+    ctx.stroke();
+
+    /*
+     * Main border
+     */
+    ctx.strokeStyle = "#C792EA";
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+}
+
+
+function clearKspaceLasso() {
+    state.kspaceLasso.pixelPath = [];
+    state.kspaceLasso.vertices = [];
+    state.kspaceLasso.isDrawing = false;
+    state.kspaceLasso.mouseDown = false;
+
+    const ctx = state.kspaceLasso.ctx;
+    const canvas = state.kspaceLasso.canvas;
+
+    if (ctx && canvas) {
+        const rect = canvas.getBoundingClientRect();
+        ctx.clearRect(0, 0, rect.width, rect.height);
+    }
+}
+
+
+function finalizeKspaceLasso() {
+    const vertices = state.kspaceLasso.vertices;
+
+    if (!vertices || vertices.length < 3) {
+        clearKspaceLasso();
+        return;
+    }
+
+    state.kspaceLasso.isDrawing = false;
+    state.kspaceLasso.mouseDown = false;
+    state.kspaceLasso.pixelPath = [];
+
+    drawKspaceLassoRegions();
+
+    setStatus(
+        `Custom k-space region selected (${vertices.length} points).`,
+        "loaded"
+    );
+}
+
+
+function cancelKspaceLasso() {
+    state.kspaceLasso.isDrawing = false;
+    state.kspaceLasso.mouseDown = false;
+    state.kspaceLasso.pixelPath = [];
+
+    /*
+     * Do NOT delete an already completed region.
+     * Escape only cancels the currently-being-drawn region.
+     */
+    drawKspaceLassoRegions();
+}
+
+
+function wireKspaceLassoEvents() {
+    const canvas = state.kspaceLasso.canvas;
+
+    if (!canvas) return;
+
+    /*
+     * Prevent browser image dragging.
+     */
+    canvas.addEventListener("dragstart", (e) => {
+        e.preventDefault();
+    });
+
+    canvas.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        cancelKspaceLasso();
+    });
+
+    canvas.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+
+        if (!state.kspaceLasso.enabled) return;
+
+        const pos = getKspaceMousePosition(e);
+
+        if (!pos) return;
+
+        state.kspaceLasso.isDrawing = true;
+        state.kspaceLasso.mouseDown = true;
+        state.kspaceLasso.pixelPath = [
+            {
+                x: pos.x,
+                y: pos.y,
+            },
+        ];
+
+        state.kspaceLasso.vertices = [];
+
+        const data = kspacePixelToData(
+            pos.x,
+            pos.y
+        );
+
+        if (data) {
+            state.kspaceLasso.vertices.push(data);
+        }
+
+        drawCurrentKspaceLasso();
+
+        e.preventDefault();
+    });
+
+    canvas.addEventListener("mousemove", (e) => {
+        if (!state.kspaceLasso.isDrawing) return;
+        if (!state.kspaceLasso.mouseDown) return;
+
+        const pos = getKspaceMousePosition(e);
+
+        if (!pos) return;
+
+        const path =
+            state.kspaceLasso.pixelPath;
+
+        const last =
+            path[path.length - 1];
+
+        const dx = pos.x - last.x;
+        const dy = pos.y - last.y;
+
+        /*
+         * Don't store hundreds/thousands of almost-identical
+         * points. This keeps the polygon lightweight.
+         */
+        if (Math.sqrt(dx * dx + dy * dy) < 3) {
+            return;
+        }
+
+        path.push({
+            x: pos.x,
+            y: pos.y,
+        });
+
+        const data =
+            kspacePixelToData(
+                pos.x,
+                pos.y
+            );
+
+        if (data) {
+            state.kspaceLasso.vertices.push(data);
+        }
+
+        drawCurrentKspaceLasso();
+
+        e.preventDefault();
+    });
+
+    const finish = () => {
+        if (!state.kspaceLasso.mouseDown) return;
+
+        state.kspaceLasso.mouseDown = false;
+
+        if (
+            state.kspaceLasso.vertices.length >= 3
+        ) {
+            finalizeKspaceLasso();
+        } else {
+            cancelKspaceLasso();
+        }
+    };
+
+    canvas.addEventListener("mouseup", finish);
+    canvas.addEventListener("mouseleave", finish);
+}
+
+
+function setupKspaceLassoControls() {
+    const maskTypeSelect = el("maskTypeSelect");
+    const lassoField = el("maskLassoField");
+    const button = el("kspaceLassoBtn");
+
+    if (!maskTypeSelect || !lassoField || !button) return;
+
+    lassoField.hidden = maskTypeSelect.value !== "custom_lasso";
+
+    button.addEventListener("click", () => {
+        const isCurrentlyDrawing =
+            state.kspaceLasso.enabled;
+
+        state.kspaceLasso.enabled =
+            !isCurrentlyDrawing;
+
+        if (state.kspaceLasso.enabled) {
+            button.textContent = "Cancel Drawing";
+            button.classList.add("active");
+
+            setStatus(
+                "Drag on the k-space image to draw a custom region."
+            );
+        } else {
+            button.textContent = "Draw Custom Region";
+            button.classList.remove("active");
+
+            cancelKspaceLasso();
+        }
+    });
+
+    /*
+     * When Custom Lasso is selected, automatically prepare
+     * the interactive k-space image.
+     */
+    maskTypeSelect.addEventListener("change", (e) => {
+        const lassoSelected = e.target.value === "custom_lasso";
+        lassoField.hidden = !lassoSelected;
+
+        if (e.target.value === "custom_lasso") {
+            initKspaceLassoCanvas();
+            wireKspaceLassoEvents();
+            state.kspaceLasso.enabled = false;
+            button.textContent = "Draw Custom Region";
+            button.classList.remove("active");
+        } else {
+            state.kspaceLasso.enabled = false;
+
+            button.textContent = "Draw Custom Region";
+            button.classList.remove("active");
+
+            cancelKspaceLasso();
+        }
+    });
+}
+
+
 function updateMaskTip(type, mode) {
     const tip = el("maskTipText");
+
     if (!tip) return;
 
     if (type === "center") {
         if (mode === "isolate") {
-            tip.innerHTML = "<b>Center Isolated:</b> Low spatial frequencies preserved &rarr; Overall contrast and coarse geometry survive, but edges and fine details are blurred out.";
+            tip.innerHTML =
+                "<b>Center Isolated:</b> Low spatial frequencies preserved &rarr; Overall contrast and coarse geometry survive, but edges and fine details are blurred out.";
         } else {
-            tip.innerHTML = "<b>Center Removed:</b> Low spatial frequencies blocked &rarr; Global contrast collapses completely while fine boundary outlines and high-frequency edge fringes remain.";
+            tip.innerHTML =
+                "<b>Center Removed:</b> Low spatial frequencies blocked &rarr; Global contrast collapses while fine boundary information remains.";
         }
+
     } else if (type === "outer") {
         if (mode === "isolate") {
-            tip.innerHTML = "<b>Outer Isolated:</b> Only peripheral high spatial frequencies kept &rarr; Displays prominent edge gradients with near-zero bulk tissue contrast.";
+            tip.innerHTML =
+                "<b>Outer Isolated:</b> Only peripheral high spatial frequencies kept &rarr; Edge information dominates while bulk contrast is reduced.";
         } else {
-            tip.innerHTML = "<b>Outer Removed:</b> Classical circular low-pass filter &rarr; High-frequency edge ripples and sharp transitions are suppressed.";
+            tip.innerHTML =
+                "<b>Outer Removed:</b> Classical circular low-pass behavior &rarr; High-frequency edge information is suppressed.";
+
         }
+
+    } else if (type === "custom_lasso") {
+        tip.innerHTML =
+            "<b>Custom Lasso Mask:</b> Draw any free-form region directly on k-space &rarr; isolate or remove exactly the spatial-frequency region you select.";
+
     } else {
-        tip.innerHTML = "<b>Custom Rectangular Mask:</b> Allows anisotropic exploration &rarr; Masking a horizontal band selectively suppresses vertical frequency components and vice versa.";
+        tip.innerHTML =
+            "<b>Custom Rectangular Mask:</b> Allows anisotropic exploration &rarr; Select horizontal or vertical frequency bands independently.";
     }
 }
 
@@ -630,12 +1282,48 @@ function setupEventListeners() {
     if (maskTypeSelect) {
         maskTypeSelect.addEventListener("change", (e) => {
             const val = e.target.value;
+
             if (val === "custom") {
-                if (maskRadiusField) maskRadiusField.style.display = "none";
-                if (maskCustomGrid) maskCustomGrid.style.display = "grid";
-            } else {
-                if (maskRadiusField) maskRadiusField.style.display = "block";
-                if (maskCustomGrid) maskCustomGrid.style.display = "none";
+                if (maskRadiusField) {
+                    maskRadiusField.style.display = "none";
+                }
+
+                if (maskCustomGrid) {
+                    maskCustomGrid.style.display = "grid";
+                }
+
+                state.kspaceLasso.enabled = false;
+            }
+
+            else if (val === "custom_lasso") {
+                if (maskRadiusField) {
+                    maskRadiusField.style.display = "none";
+                }
+
+                if (maskCustomGrid) {
+                    maskCustomGrid.style.display = "none";
+                }
+            }
+
+            else {
+                if (maskRadiusField) {
+                    maskRadiusField.style.display = "block";
+                }
+
+                if (maskCustomGrid) {
+                    maskCustomGrid.style.display = "none";
+                }
+
+                state.kspaceLasso.enabled = false;
+
+                const button = el("kspaceLassoBtn");
+
+                if (button) {
+                    button.textContent = "Draw Custom Region";
+                    button.classList.remove("active");
+                }
+
+                cancelKspaceLasso();
             }
         });
     }
@@ -682,13 +1370,39 @@ function setupEventListeners() {
     });
 
     // Buttons
+    // Buttons
     el("analyzeBtn")?.addEventListener("click", handleAnalyze);
-    el("genComponentsBtn")?.addEventListener("click", () => handleGenComponents(false));
-    el("applyMaskBtn")?.addEventListener("click", () => handleApplyMask(false));
-    el("saveMaskBtn")?.addEventListener("click", handleSaveMask);
-    el("applyRetentionBtn")?.addEventListener("click", () => handleApplyRetention(false));
-    el("saveRetainBtn")?.addEventListener("click", handleSaveRetain);
-    el("sweepBtn")?.addEventListener("click", handleRunSweep);
+    el("genComponentsBtn")?.addEventListener(
+        "click",
+        () => handleGenComponents(false)
+    );
+    el("applyMaskBtn")?.addEventListener(
+        "click",
+        () => handleApplyMask(false)
+    );
+    el("resetMaskBtn")?.addEventListener(
+        "click",
+        handleResetMask
+    );
+    el("saveMaskBtn")?.addEventListener(
+        "click",
+        handleSaveMask
+    );
+    el("applyRetentionBtn")?.addEventListener(
+        "click",
+        () => handleApplyRetention(false)
+    );
+    el("saveRetainBtn")?.addEventListener(
+        "click",
+        handleSaveRetain
+    );
+    el("sweepBtn")?.addEventListener(
+        "click",
+        handleRunSweep
+    );
+
+
+    setupKspaceLassoControls();
 }
 
 document.addEventListener("DOMContentLoaded", () => {

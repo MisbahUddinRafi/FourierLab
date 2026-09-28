@@ -60,6 +60,12 @@ SWEEP_FRACTIONS    = [0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0]
 # Internal helpers
 # -------------------------------------------------------------------------
 
+
+class KspaceLassoVertex(BaseModel):
+    kx: float
+    ky: float
+
+
 def _is_raw_kspace_source(source: str) -> bool:
     """Return True when the source file already contains raw k-space (.h5)."""
     return Path(source).suffix.lower() == ".h5"
@@ -108,6 +114,88 @@ def _center_energy(kspace: np.ndarray) -> float:
     center = float(np.sum(np.abs(kspace[center_disk]) ** 2))
     return round((center / total) * 100.0, 1)
 
+def _polygon_mask_from_vertices(
+    shape: tuple[int, int],
+    vertices: list[KspaceLassoVertex],
+) -> np.ndarray:
+    """
+    Convert normalized k-space polygon coordinates into
+    a boolean mask.
+
+    Coordinate system:
+        kx = -0.5 ... +0.5
+        ky = -0.5 ... +0.5
+
+    The center of k-space is (0, 0).
+    """
+
+    rows, cols = shape
+
+    if len(vertices) < 3:
+        raise HTTPException(
+            400,
+            "A lasso region must contain at least 3 vertices."
+        )
+
+    # Normalized pixel-center coordinates.
+    x = (
+        np.arange(cols, dtype=np.float64)
+        + 0.5
+    ) / cols - 0.5
+
+    y = (
+        np.arange(rows, dtype=np.float64)
+        + 0.5
+    ) / rows - 0.5
+
+    xx, yy = np.meshgrid(x, y)
+
+    polygon = np.array(
+        [[v.kx, v.ky] for v in vertices],
+        dtype=np.float64,
+    )
+
+    # Validate coordinate range.
+    if (
+        np.any(polygon[:, 0] < -0.5)
+        or np.any(polygon[:, 0] > 0.5)
+        or np.any(polygon[:, 1] < -0.5)
+        or np.any(polygon[:, 1] > 0.5)
+    ):
+        raise HTTPException(
+            400,
+            "Lasso coordinates must be within [-0.5, 0.5]."
+        )
+
+    inside = np.zeros(
+        (rows, cols),
+        dtype=bool,
+    )
+
+    j = len(polygon) - 1
+
+    for i in range(len(polygon)):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+
+        intersects = (
+            ((yi > yy) != (yj > yy))
+            &
+            (
+                xx
+                <
+                (xj - xi)
+                * (yy - yi)
+                / ((yj - yi) + 1e-12)
+                + xi
+            )
+        )
+
+        inside ^= intersects
+
+        j = i
+
+    return inside
 
 # -------------------------------------------------------------------------
 # Pydantic models
@@ -126,17 +214,25 @@ class ImageComponentRequest(BaseModel):
     mode: str = "both"
 
 
+
+
+
 class ImageMaskRequest(BaseModel):
     source: str
-    resolution: int   = 160
+    resolution: int = 160
     phase_strength: float = 0.6
     mask_type: str = "center"
-    mode: str      = "isolate"
-    radius: float  = 0.25
-    kx_min: float  = -0.4
-    kx_max: float  =  0.4
-    ky_min: float  = -0.4
-    ky_max: float  =  0.4
+    mode: str = "isolate"
+    radius: float = 0.25
+
+    # Existing rectangular custom mask
+    kx_min: float = -0.4
+    kx_max: float = 0.4
+    ky_min: float = -0.4
+    ky_max: float = 0.4
+
+    # New free-form polygon mask
+    lasso_vertices: list[KspaceLassoVertex] | None = None
 
 
 class ImageRetainRequest(BaseModel):
@@ -256,42 +352,157 @@ def reconstruct_components(req: ImageComponentRequest):
 
 @router.post("/mask")
 def mask_image(req: ImageMaskRequest):
-    img, raw_kspace = resolve_source(req.source, req.resolution)
-    _, full_kspace, _ = _build_full_kspace(img, raw_kspace, req.phase_strength)
-    kspace_log_mag    = kspace_log_magnitude(full_kspace)
-
-    if req.mask_type not in {"center", "outer", "custom"}:
-        raise HTTPException(400, f"Invalid mask_type '{req.mask_type}'.")
-    if req.mode not in {"isolate", "remove"}:
-        raise HTTPException(400, f"Invalid mode '{req.mode}'.")
-
-    keep_mask    = build_kspace_mask(
-        full_kspace.shape, req.mask_type, req.mode,
-        radius=req.radius,
-        kx_range=(req.kx_min, req.kx_max),
-        ky_range=(req.ky_min, req.ky_max),
+    img, raw_kspace = resolve_source(
+        req.source,
+        req.resolution
     )
-    masked_ks    = apply_mask(full_kspace, keep_mask)
-    masked_recon = normalize_image(np.abs(ifft2_centered(masked_ks)))
-    retained_pct = float(100.0 * np.mean(keep_mask))
 
-    m_mse        = mse_metric(img, masked_recon)
-    m_psnr       = psnr_metric(img, masked_recon)
-    m_ssim, m_ssim_map = ssim_metric(img, masked_recon)
-    err_map      = error_heatmap(img, masked_recon)
+    _, full_kspace, _ = _build_full_kspace(
+        img,
+        raw_kspace,
+        req.phase_strength
+    )
+
+    kspace_log_mag = kspace_log_magnitude(
+        full_kspace
+    )
+
+    if req.mask_type not in {
+        "center",
+        "outer",
+        "custom",
+        "custom_lasso",
+    }:
+        raise HTTPException(
+            400,
+            f"Invalid mask_type '{req.mask_type}'."
+        )
+
+    if req.mode not in {
+        "isolate",
+        "remove",
+    }:
+        raise HTTPException(
+            400,
+            f"Invalid mode '{req.mode}'."
+        )
+
+    # ---------------------------------------------------------
+    # Free-form lasso polygon
+    # ---------------------------------------------------------
+    if req.mask_type == "custom_lasso":
+
+        if not req.lasso_vertices:
+            raise HTTPException(
+                400,
+                "Draw a k-space region before applying the mask."
+            )
+
+        polygon_mask = _polygon_mask_from_vertices(
+            full_kspace.shape,
+            req.lasso_vertices,
+        )
+
+        if req.mode == "isolate":
+            keep_mask = polygon_mask
+
+        else:
+            keep_mask = ~polygon_mask
+
+    # ---------------------------------------------------------
+    # Existing center / outer / rectangular masks
+    # ---------------------------------------------------------
+    else:
+        keep_mask = build_kspace_mask(
+            full_kspace.shape,
+            req.mask_type,
+            req.mode,
+            radius=req.radius,
+            kx_range=(
+                req.kx_min,
+                req.kx_max,
+            ),
+            ky_range=(
+                req.ky_min,
+                req.ky_max,
+            ),
+        )
+
+    masked_ks = apply_mask(
+        full_kspace,
+        keep_mask
+    )
+
+    masked_recon = normalize_image(
+        np.abs(
+            ifft2_centered(masked_ks)
+        )
+    )
+
+    retained_pct = float(
+        100.0 * np.mean(keep_mask)
+    )
+
+    m_mse = mse_metric(
+        img,
+        masked_recon
+    )
+
+    m_psnr = psnr_metric(
+        img,
+        masked_recon
+    )
+
+    m_ssim, m_ssim_map = ssim_metric(
+        img,
+        masked_recon
+    )
+
+    err_map = error_heatmap(
+        img,
+        masked_recon
+    )
 
     return {
-        "mask_overlay_b64":  mask_overlay_base64(kspace_log_mag, keep_mask),
-        "recon_b64":         image_to_base64(masked_recon),
-        "error_heatmap_b64": error_heatmap_base64(err_map),
-        "ssim_map_b64":      ssim_map_base64(m_ssim_map),
-        "retained_pct":      round(retained_pct, 1),
-        "mse":               sanitize_val(m_mse),
-        "psnr":              sanitize_val(m_psnr),
-        "ssim":              sanitize_val(m_ssim),
-        "error_max":         sanitize_val(float(err_map.max()), 0.0),
-    }
+        "mask_overlay_b64":
+            mask_overlay_base64(
+                kspace_log_mag,
+                keep_mask
+            ),
 
+        "recon_b64":
+            image_to_base64(
+                masked_recon
+            ),
+
+        "error_heatmap_b64":
+            error_heatmap_base64(
+                err_map
+            ),
+
+        "ssim_map_b64":
+            ssim_map_base64(
+                m_ssim_map
+            ),
+
+        "retained_pct":
+            round(retained_pct, 1),
+
+        "mse":
+            sanitize_val(m_mse),
+
+        "psnr":
+            sanitize_val(m_psnr),
+
+        "ssim":
+            sanitize_val(m_ssim),
+
+        "error_max":
+            sanitize_val(
+                float(err_map.max()),
+                0.0
+            ),
+    }
 
 @router.post("/retain")
 def retain_image(req: ImageRetainRequest):

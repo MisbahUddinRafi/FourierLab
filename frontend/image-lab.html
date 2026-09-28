@@ -158,7 +158,8 @@
                             <span class="image-card-badge">2D FFT</span>
                         </div>
                         <div class="plot-hint" style="margin-top:0; margin-bottom:12px;">
-                            <b>Spatial Image &rarr; 2D Centered FFT &rarr; k-Space (2D Frequencies) &rarr; Inverse 2D FFT &rarr; Reconstructed Image</b>
+                            <b>Spatial Image &rarr; 2D Centered FFT &rarr; k-Space (2D Frequencies) &rarr; Inverse 2D
+                                FFT &rarr; Reconstructed Image</b>
                         </div>
                     </div>
 
@@ -214,8 +215,10 @@
 
                     <div class="plot-card" style="margin-top:16px;">
                         <div class="plot-hint">
-                            <b>Educational Insight:</b> An MRI scanner does not photograph anatomy directly—it measures spatial frequency samples in <b>k-space</b>.
-                            The center carries low spatial frequencies (gross contrast and anatomical contours); the periphery carries high spatial frequencies (edges, boundaries, and fine tissue details).
+                            <b>Educational Insight:</b> An MRI scanner does not photograph anatomy directly—it measures
+                            spatial frequency samples in <b>k-space</b>.
+                            The center carries low spatial frequencies (gross contrast and anatomical contours); the
+                            periphery carries high spatial frequencies (edges, boundaries, and fine tissue details).
                         </div>
                     </div>
                 </div>
@@ -226,10 +229,12 @@
                 <div id="tabMagPhase" class="lab-panel">
                     <div class="plot-card">
                         <div class="plot-card-head">
-                            <div class="plot-card-title">Complex Decomposition: K(u, v) = |K(u, v)| &middot; exp(j &phi;(u, v))</div>
+                            <div class="plot-card-title">Complex Decomposition: K(u, v) = |K(u, v)| &middot; exp(j
+                                &phi;(u, v))</div>
                         </div>
                         <div class="plot-hint" style="margin-top:0;">
-                            Every k-space measurement is complex-valued. Adjust <b>Phase strength</b> in the sidebar to simulate field inhomogeneities.
+                            Every k-space measurement is complex-valued. Adjust <b>Phase strength</b> in the sidebar to
+                            simulate field inhomogeneities.
                         </div>
                     </div>
 
@@ -292,7 +297,8 @@
                                 <img id="magOnlyReconImg" alt="Magnitude-only reconstruction">
                             </div>
                             <div class="image-card-caption">
-                                All phase angles forced to 0. Notice the complete loss of spatial structure into cloud-like haze.
+                                All phase angles forced to 0. Notice the complete loss of spatial structure into
+                                cloud-like haze.
                             </div>
                         </div>
 
@@ -305,15 +311,18 @@
                                 <img id="phaseOnlyReconImg" alt="Phase-only reconstruction">
                             </div>
                             <div class="image-card-caption">
-                                All magnitudes flattened to 1. Notice that recognizable edges, shapes, and contours remain intact!
+                                All magnitudes flattened to 1. Notice that recognizable edges, shapes, and contours
+                                remain intact!
                             </div>
                         </div>
                     </div>
 
                     <div class="plot-card" style="margin-top:16px;">
                         <div class="plot-hint">
-                            <b>Counter-Intuitive Insight:</b> For natural and medical images, <b>phase carries most of the recognizable geometric structure</b>, while magnitude carries global contrast.
-                            In audio signals, the exact opposite holds: magnitude (spectrogram) dominates human perception and timbre, while phase changes are largely imperceptible.
+                            <b>Counter-Intuitive Insight:</b> For natural and medical images, <b>phase carries most of
+                                the recognizable geometric structure</b>, while magnitude carries global contrast.
+                            In audio signals, the exact opposite holds: magnitude (spectrogram) dominates human
+                            perception and timbre, while phase changes are largely imperceptible.
                         </div>
                     </div>
                 </div>
@@ -335,13 +344,14 @@
 
                         <!-- Mask parameters grid -->
                         <div class="mask-editor-card">
-                            <div class="mask-editor-grid">
+                            <div class="mask-editor-grid image-mask-control-grid">
                                 <div class="field">
                                     <label class="field-label">Region Type</label>
                                     <select id="maskTypeSelect">
-                                        <option value="center" selected>Center Disk (Low Frequencies)</option>
-                                        <option value="outer">Outer Disk (High Frequencies)</option>
-                                        <option value="custom">Custom Rectangle (Anisotropic)</option>
+                                        <option value="center">Center</option>
+                                        <option value="outer">Outer</option>
+                                        <option value="custom">Custom Rectangle</option>
+                                        <option value="custom_lasso">Custom Lasso Region</option>
                                     </select>
                                 </div>
 
@@ -364,12 +374,21 @@
                                     <label class="field-label">
                                         Region Radius: <span id="maskRadiusLabel">0.25</span>
                                     </label>
-                                    <input type="range" id="maskRadiusSlider" min="0.05" max="1.0" step="0.01" value="0.25">
+                                    <input type="range" id="maskRadiusSlider" min="0.05" max="1.0" step="0.01"
+                                        value="0.25">
+                                </div>
+
+                                <div id="maskLassoField" class="field" hidden>
+                                    <label class="field-label">Custom Region</label>
+                                    <button id="kspaceLassoBtn" class="btn btn-outline-cyan btn-sm" type="button">
+                                        Draw Custom Region
+                                    </button>
                                 </div>
                             </div>
 
                             <!-- Custom rectangular sliders (shown when custom is selected) -->
-                            <div id="maskCustomGrid" class="mask-editor-grid" style="display:none; margin-top:14px; padding-top:12px; border-top:1px solid var(--border);">
+                            <div id="maskCustomGrid" class="mask-editor-grid"
+                                style="display:none; margin-top:14px; padding-top:12px; border-top:1px solid var(--border);">
                                 <div class="field">
                                     <label class="field-label">kx min: <span id="kxMinLabel">-0.40</span></label>
                                     <input type="range" id="kxMinSlider" min="-1.4" max="0.0" step="0.05" value="-0.4">
@@ -394,6 +413,9 @@
                             <button id="applyMaskBtn" class="btn btn-primary btn-sm" type="button">
                                 Apply Mask
                             </button>
+                            <button id="resetMaskBtn" class="btn btn-ghost btn-sm" type="button">
+                                Reset Mask
+                            </button>
                             <button id="saveMaskBtn" class="btn btn-ghost btn-sm" type="button">
                                 Save to gallery
                             </button>
@@ -401,30 +423,43 @@
                     </div>
 
                     <!-- Visual Comparison Grid -->
-                    <div class="image-grid-3">
+                    <div class="image-grid-2">
+                        <div class="image-card">
+                            <div class="image-card-head">
+                                <div class="image-card-title">Original k-Space</div>
+                                <span class="image-card-badge">Full acquisition</span>
+                            </div>
+                            <div class="image-frame">
+                                <img id="maskOriginalKspaceImg" alt="Original k-Space">
+                            </div>
+                            <div class="image-card-caption">
+                                Full k-space magnitude before applying a mask.
+                            </div>
+                        </div>
+
                         <div class="image-card">
                             <div class="image-card-head">
                                 <div class="image-card-title">k-Space Mask Overlay</div>
-                                <span id="maskRetainedBadge" class="image-card-badge">--% kept</span>
+                                <span id="maskRetainedBadge" class="image-card-badge">Not applied</span>
                             </div>
                             <div class="image-frame">
                                 <img id="maskOverlayImg" alt="k-Space Mask Overlay">
                             </div>
                             <div class="image-card-caption">
-                                Selected frequency region highlighted; dimmed region is zeroed out.
+                                Initially matches the original k-space; applying a mask highlights retained and removed frequencies.
                             </div>
                         </div>
 
                         <div class="image-card">
                             <div class="image-card-head">
                                 <div class="image-card-title">Masked Reconstruction</div>
-                                <span class="image-card-badge">Inverse FFT</span>
+                                <span class="image-card-badge">Original before masking</span>
                             </div>
                             <div class="image-frame">
                                 <img id="maskReconImg" alt="Masked Reconstruction">
                             </div>
                             <div class="image-card-caption">
-                                Image reconstructed exclusively from the surviving k-space coefficients.
+                                Shows the original image until a masked reconstruction is applied.
                             </div>
                         </div>
 
@@ -434,7 +469,10 @@
                                 <span class="image-card-badge">Inferno</span>
                             </div>
                             <div class="image-frame">
-                                <img id="maskErrorImg" alt="Absolute Error Heatmap">
+                                <img id="maskErrorImg" alt="Absolute Error Heatmap" hidden>
+                                <div id="maskErrorPlaceholder" class="image-frame-placeholder">
+                                    Apply a mask to view the absolute error map.
+                                </div>
                             </div>
                             <div class="colorbar-wrap">
                                 <div class="colorbar-strip colorbar-inferno"></div>
@@ -453,7 +491,9 @@
 
                     <div id="maskTipCard" class="plot-card" style="margin-top:14px;">
                         <div id="maskTipText" class="plot-hint">
-                            <b>Masking Tip:</b> Isolating the center retains overall contrast and large shapes while blurring sharp edges. Removing the center destroys global contrast while leaving fine edge outlines.
+                            <b>Masking Tip:</b> Isolating the center retains overall contrast and large shapes while
+                            blurring sharp edges. Removing the center destroys global contrast while leaving fine edge
+                            outlines.
                         </div>
                     </div>
 
@@ -468,8 +508,10 @@
                             <div class="field retention-strategy">
                                 <label class="field-label">Retention Strategy</label>
                                 <select id="strategySelect">
-                                    <option value="center_radius" selected>Center-radius retention (undersampled acquisition)</option>
-                                    <option value="top_magnitude">Top-magnitude retention (data-driven / compressive)</option>
+                                    <option value="center_radius" selected>Center-radius retention (undersampled
+                                        acquisition)</option>
+                                    <option value="top_magnitude">Top-magnitude retention (data-driven / compressive)
+                                    </option>
                                 </select>
                             </div>
 
@@ -551,7 +593,9 @@
                         </div>
                         <div id="sweepChart"></div>
                         <div class="plot-hint">
-                            Center-radius retention typically achieves higher perceptual quality at modest retention fractions than random or high-pass sampling, because MRI signal energy decays radially from DC.
+                            Center-radius retention typically achieves higher perceptual quality at modest retention
+                            fractions than random or high-pass sampling, because MRI signal energy decays radially from
+                            DC.
                         </div>
                     </div>
                 </div>
@@ -565,7 +609,8 @@
                             <div class="plot-card-title">Quantitative Reconstruction Analysis</div>
                         </div>
                         <div class="plot-hint" style="margin-top:0;">
-                            Metrics evaluated for the most recent Masking or Progressive Retention result against the original image.
+                            Metrics evaluated for the most recent Masking or Progressive Retention result against the
+                            original image.
                         </div>
                     </div>
 
@@ -609,7 +654,8 @@
                                 </div>
                             </div>
                             <div class="image-card-caption">
-                                Local SSIM map highlights where structural features (luminance, contrast, edges) were preserved vs corrupted.
+                                Local SSIM map highlights where structural features (luminance, contrast, edges) were
+                                preserved vs corrupted.
                             </div>
                         </div>
                     </div>
@@ -619,9 +665,16 @@
                             <div class="plot-card-title">Understanding the Metrics</div>
                         </div>
                         <div class="plot-hint" style="line-height:1.6;">
-                            <p><b>MSE (Mean Squared Error)</b>: Average squared pixel-by-pixel difference. Lower is better (0 = identical). Treats every pixel independently with no awareness of anatomical structure.</p>
-                            <p style="margin-top:8px;"><b>PSNR (Peak Signal-to-Noise Ratio)</b>: Logarithmic decibel transform of MSE: <code>PSNR = 10 &middot; log10(1 / MSE)</code>. Higher is better. A reconstruction above 30 dB is generally considered high quality.</p>
-                            <p style="margin-top:8px;"><b>SSIM (Structural Similarity Index)</b>: Evaluates local luminance, contrast, and structural correlation using a Gaussian sliding window. Ranges in [-1, 1], where 1.0 is exact match. Unlike MSE, SSIM penalizes blurring and edge loss heavily—capturing visual degradation that humans notice immediately.</p>
+                            <p><b>MSE (Mean Squared Error)</b>: Average squared pixel-by-pixel difference. Lower is
+                                better (0 = identical). Treats every pixel independently with no awareness of anatomical
+                                structure.</p>
+                            <p style="margin-top:8px;"><b>PSNR (Peak Signal-to-Noise Ratio)</b>: Logarithmic decibel
+                                transform of MSE: <code>PSNR = 10 &middot; log10(1 / MSE)</code>. Higher is better. A
+                                reconstruction above 30 dB is generally considered high quality.</p>
+                            <p style="margin-top:8px;"><b>SSIM (Structural Similarity Index)</b>: Evaluates local
+                                luminance, contrast, and structural correlation using a Gaussian sliding window. Ranges
+                                in [-1, 1], where 1.0 is exact match. Unlike MSE, SSIM penalizes blurring and edge loss
+                                heavily—capturing visual degradation that humans notice immediately.</p>
                         </div>
                     </div>
                 </div>
