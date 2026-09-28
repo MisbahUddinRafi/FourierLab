@@ -1,0 +1,10 @@
+# Generated / uploaded media
+backend/assets/audio/saved/
+backend/assets/audio/_uploads/
+backend/assets/audio/_music_lab/
+backend/assets/images/saved/
+
+
+# Python cache
+__pycache__/
+*.py[cod]ad
