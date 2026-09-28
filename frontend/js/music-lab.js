@@ -412,14 +412,24 @@ function renderSpectrogram(containerId, freqs, times, magnitude_db) {
             if (v < zRawMin) zRawMin = v;
         }
     }
-    const zMin = Math.max(zRawMin, zMax - 80);
+    const zMin = Math.max(zRawMin, zMax - 60);
+    console.log("zMax:", zMax, "zMin:", zMin, "rows:", magnitude_db.length, "cols:", magnitude_db[0]?.length);
 
     const trace = {
         x: times,
         y: freqs,
         z: magnitude_db,
         type: "heatmap",
-        colorscale: "Inferno",
+        colorscale: [
+            [0.0, "#0d0221"],
+            [0.15, "#0a1045"],
+            [0.3, "#1a3a6b"],
+            [0.45, "#0e6b8f"],
+            [0.6, "#12a89e"],
+            [0.75, "#43c98a"],
+            [0.88, "#c8e353"],
+            [1.0, "#fffca0"],
+        ],
         zsmooth: "best",
         zmin: zMin,
         zmax: zMax,

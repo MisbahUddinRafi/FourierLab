@@ -155,7 +155,19 @@ def apply_filter_block(
     elif ft == "custom_gain":
         region_mask = (freqs >= block.freq_min) & (freqs <= block.freq_max)
         linear_gain = 10.0 ** (block.gain_db / 20.0)
-        freq_gain[region_mask] = linear_gain
+        # Build a smooth bell taper around the selected band edges
+        # so the gain doesn't jump hard at freq_min / freq_max
+        gain_curve = np.ones(n_freq_bins, dtype=np.float64)
+        gain_curve[region_mask] = linear_gain
+        # Taper the transition: blend over 3 bins at each edge
+        indices = np.where(region_mask)[0]
+        if len(indices) > 0:
+            for edge_idx in [indices[0], indices[-1]]:
+                for offset, weight in [(0, 0.5), (-1 if edge_idx == indices[-1] else 1, 0.75)]:
+                    neighbour = edge_idx + offset
+                    if 0 <= neighbour < n_freq_bins and not region_mask[neighbour]:
+                        gain_curve[neighbour] = 1.0 + (linear_gain - 1.0) * weight
+        freq_gain = gain_curve
 
     else:
         raise HTTPException(400, f"Unknown filter_type '{ft}'.")
@@ -551,8 +563,15 @@ def filter_audio(req: FilterRequest):
         D_filtered = apply_filter_block(
             D_filtered, block, sr, req.n_fft, req.hop_length, duration
         )
-
+        
     y_filtered = compute_istft(D_filtered, req.hop_length, req.n_fft, length=len(y))
+
+    # Preserve the gain that was intentionally applied — clip instead of normalize.
+    # Without this, waveform_to_wav_bytes normalizes peak amplitude and
+    # the custom_gain effect disappears in the output audio.
+    peak = np.max(np.abs(y_filtered))
+    if peak > 1.0:
+        y_filtered = y_filtered / peak * 0.98   # only reduce if clipping, never amplify back
 
     magnitude_filtered = np.abs(D_filtered)
     magnitude_db_filtered = magnitude_to_db(

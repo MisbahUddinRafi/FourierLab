@@ -543,10 +543,40 @@
                         </div>
 
                         <!-- Gain row: only visible for custom_gain -->
+                        <!-- Gain row: only visible for custom_gain -->
                         <div id="filterGainRow" style="display: none; margin-top: 10px;">
-                            <div class="field" style="max-width: 160px;">
-                                <label class="field-label" for="filterGainDb">Gain (dB)</label>
-                                <input type="number" id="filterGainDb" class="text-input" step="0.5" value="0">
+                            <div class="field">
+                                <label class="field-label" for="filterGainDb">
+                                    Gain: <span id="filterGainLabel">0 dB</span>
+                                </label>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <input type="range" id="filterGainSlider" min="-24" max="24" step="0.5" value="0"
+                                        style="flex: 1; min-width: 140px;">
+                                    <input type="number" id="filterGainDb" class="text-input" step="0.5" value="0"
+                                        style="width: 72px;">
+                                </div>
+                            </div>
+                            <div class="field" style="margin-top: 8px;">
+                                <label class="field-label">Frequency band presets</label>
+                                <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;">
+                                    <button class="btn btn-outline-cyan btn-sm eq-preset-btn" type="button"
+                                        data-fmin="20" data-fmax="250"
+                                        data-label="Sub-bass (20–250 Hz)">Sub-bass</button>
+                                    <button class="btn btn-outline-cyan btn-sm eq-preset-btn" type="button"
+                                        data-fmin="250" data-fmax="500" data-label="Bass (250–500 Hz)">Bass</button>
+                                    <button class="btn btn-outline-cyan btn-sm eq-preset-btn" type="button"
+                                        data-fmin="500" data-fmax="2000"
+                                        data-label="Midrange (500–2000 Hz)">Midrange</button>
+                                    <button class="btn btn-outline-cyan btn-sm eq-preset-btn" type="button"
+                                        data-fmin="2000" data-fmax="6000"
+                                        data-label="Presence (2–6 kHz)">Presence</button>
+                                    <button class="btn btn-outline-cyan btn-sm eq-preset-btn" type="button"
+                                        data-fmin="6000" data-fmax="11025"
+                                        data-label="Brilliance (6–11 kHz)">Brilliance</button>
+                                </div>
+                                <div id="eqPresetHint" style="font-size:11px; color:#5A7A9A; margin-top:5px;">
+                                    Click a preset to set the frequency range, then adjust gain above.
+                                </div>
                             </div>
                         </div>
 
@@ -560,6 +590,16 @@
 
                     </div>
 
+                    <!-- ── EQ CURVE PREVIEW ──────────────────────────── -->
+                    <div class="plot-card" id="eqCurveCard" style="margin-top: 16px; display: none;">
+                        <div class="plot-card-head">
+                            <div class="plot-card-title">EQ Curve Preview</div>
+                            <div class="plot-card-subtitle" style="font-size:11px; color:#5A7A9A;">
+                                Live preview of the combined frequency response
+                            </div>
+                        </div>
+                        <div id="eqCurvePlot"></div>
+                    </div>
 
                     <!-- ── ACTIONS ───────────────────────────────────── -->
                     <div class="mask-actions">

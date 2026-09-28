@@ -31,7 +31,7 @@ const playbackState = {
 };
 
 
-const MAGNITUDE_COLORSCALE = "Viridis";
+const MAGNITUDE_COLORSCALE = "Hot";
 const PHASE_COLORSCALE = [
     [0, "#C792EA"],
     [0.5, "#0A1120"],
@@ -184,14 +184,24 @@ function renderSpectrogram(
             if (v < zRawMin) zRawMin = v;
         }
     }
-    const zMin = Math.max(zRawMin, zMax - 80);
+    // Tighten the dB window to 60 dB so quiet bins don't wash out the color range
+    const zMin = Math.max(zRawMin, zMax - 60);
 
     const trace = {
         x: times,
         y: yData,
         z: zData,
         type: "heatmap",
-        colorscale: "Inferno",
+        colorscale: [
+            [0.0, "#0d0221"],
+            [0.15, "#0a1045"],
+            [0.3, "#1a3a6b"],
+            [0.45, "#0e6b8f"],
+            [0.6, "#12a89e"],
+            [0.75, "#43c98a"],
+            [0.88, "#c8e353"],
+            [1.0, "#fffca0"],
+        ],
         zsmooth: "best",
         zmin: zMin,
         zmax: zMax,
@@ -1273,7 +1283,8 @@ function addFilterBlock() {
     state.selectedFilterBlockId = block.id;
     updateFilterBlockDropdown();
     updateFilterBlockEditor();
-    drawFilterResultSpectrogram();
+    drawFilterBlockShapes();
+    renderEQCurve();
 }
 
 function deleteSelectedFilterBlock() {
@@ -1292,6 +1303,7 @@ function deleteSelectedFilterBlock() {
     updateFilterBlockDropdown();
     updateFilterBlockEditor();
     drawFilterBlockShapes();
+    renderEQCurve();
 }
 
 function resetFilterBlocks() {
@@ -1407,6 +1419,7 @@ function wireFilterBlockControls() {
             block[prop] = transform ? transform(el(inputId).value) : el(inputId).value;
             if (prop === "name") updateFilterBlockDropdown();
             drawFilterBlockShapes();
+            renderEQCurve();
         });
     };
 
@@ -1415,6 +1428,29 @@ function wireFilterBlockControls() {
     syncField("filterFreqMax", "freq_max", parseFloat);
     syncField("filterTimeMin", "time_min", parseFloat);
     syncField("filterGainDb", "gain_db", parseFloat);
+
+    // Gain slider ↔ number input two-way sync
+    el("filterGainSlider")?.addEventListener("input", () => {
+        const v = parseFloat(el("filterGainSlider").value);
+        el("filterGainDb").value = v;
+        el("filterGainLabel").textContent = v + " dB";
+        const block = getSelectedFilterBlock();
+        if (!block) return;
+        block.gain_db = v;
+        renderEQCurve();
+        drawFilterBlockShapes();
+    });
+
+    el("filterGainDb")?.addEventListener("input", () => {
+        const v = parseFloat(el("filterGainDb").value) || 0;
+        if (el("filterGainSlider")) el("filterGainSlider").value = Math.max(-24, Math.min(24, v));
+        if (el("filterGainLabel")) el("filterGainLabel").textContent = v + " dB";
+        const block = getSelectedFilterBlock();
+        if (!block) return;
+        block.gain_db = v;
+        renderEQCurve();
+        drawFilterBlockShapes();
+    });
 
     // time_max: blank → null (full duration)
     el("filterTimeMax")?.addEventListener("input", () => {
@@ -1430,6 +1466,8 @@ function wireFilterBlockControls() {
         if (!block) return;
         block.filter_type = el("filterTypeSelect").value;
         el("filterGainRow").style.display = block.filter_type === "custom_gain" ? "" : "none";
+        renderEQCurve();
+        drawFilterBlockShapes();
     });
 
     el("filterBlockEnabled")?.addEventListener("change", (e) => {
@@ -1437,9 +1475,121 @@ function wireFilterBlockControls() {
         if (!block) return;
         block.enabled = e.target.checked;
         updateFilterBlockDropdown();
+        renderEQCurve();
+        drawFilterBlockShapes();
+    });
+
+    // EQ preset buttons — set freq_min / freq_max and sync to editor inputs
+    document.querySelectorAll(".eq-preset-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const block = getSelectedFilterBlock();
+            if (!block) return;
+            const fMin = parseFloat(btn.dataset.fmin);
+            const fMax = parseFloat(btn.dataset.fmax);
+            block.freq_min = fMin;
+            block.freq_max = fMax;
+            el("filterFreqMin").value = fMin;
+            el("filterFreqMax").value = fMax;
+            el("eqPresetHint").textContent = "Range set: " + btn.dataset.label;
+            drawFilterBlockShapes();
+            renderEQCurve();
+        });
     });
 }
 
+function renderEQCurve() {
+    const card = el("eqCurveCard");
+    if (!card) return;
+
+    const nyquist = state.lastAnalyze ? state.sr / 2 : 11025;
+    const enabledBlocks = state.filterBlocks.filter(b => b.enabled);
+
+    if (enabledBlocks.length === 0) {
+        card.style.display = "none";
+        return;
+    }
+
+    card.style.display = "block";
+
+    // Build a frequency axis of 512 points
+    const N = 512;
+    const freqs = Array.from({ length: N }, (_, i) => (i / (N - 1)) * nyquist);
+
+    // Start with gain = 1.0 (0 dB) everywhere
+    const gainLinear = new Float64Array(N).fill(1.0);
+
+    enabledBlocks.forEach(b => {
+        const fMin = b.freq_min;
+        const fMax = b.freq_max;
+
+        freqs.forEach((f, i) => {
+            let g = 1.0;
+
+            if (b.filter_type === "lowpass") {
+                g = f <= fMax ? 1.0 : 0.0;
+                // taper
+                const edge = fMax;
+                const bw = nyquist * 0.01;
+                if (Math.abs(f - edge) < bw) g = 0.5 + 0.5 * Math.cos(Math.PI * (f - edge) / bw) * (f <= edge ? 1 : -1);
+                g = Math.max(0, Math.min(1, g));
+
+            } else if (b.filter_type === "highpass") {
+                g = f >= fMin ? 1.0 : 0.0;
+                const edge = fMin;
+                const bw = nyquist * 0.01;
+                if (Math.abs(f - edge) < bw) g = 0.5 - 0.5 * Math.cos(Math.PI * (f - edge) / bw);
+                g = Math.max(0, Math.min(1, g));
+
+            } else if (b.filter_type === "bandpass") {
+                g = (f >= fMin && f <= fMax) ? 1.0 : 0.0;
+
+            } else if (b.filter_type === "notch") {
+                g = (f >= fMin && f <= fMax) ? 0.0 : 1.0;
+
+            } else if (b.filter_type === "custom_gain") {
+                if (f >= fMin && f <= fMax) {
+                    g = Math.pow(10, b.gain_db / 20.0);
+                } else {
+                    g = 1.0;
+                }
+            }
+
+            gainLinear[i] *= g;
+        });
+    });
+
+    // Convert to dB, clamp to -80 dB floor
+    const gainDb = Array.from(gainLinear).map(g => {
+        const db = 20 * Math.log10(Math.max(g, 1e-4));
+        return Math.max(db, -80);
+    });
+
+    const trace = {
+        x: freqs,
+        y: gainDb,
+        mode: "lines",
+        line: { color: "#FFB454", width: 2 },
+        fill: "tozeroy",
+        fillcolor: "rgba(255,180,84,0.08)",
+        name: "Gain (dB)",
+        hovertemplate: "%{x:.0f} Hz<br>%{y:.1f} dB<extra></extra>",
+    };
+
+    const layout = baseLayout({
+        height: 200,
+        xaxis: { title: "Frequency (Hz)", gridcolor: "#1C2A44" },
+        yaxis: { title: "Gain (dB)", gridcolor: "#1C2A44", zeroline: true, zerolinecolor: "#2A3F5F", zerolinewidth: 1 },
+        showlegend: false,
+        shapes: [{
+            type: "line",
+            xref: "paper", yref: "y",
+            x0: 0, x1: 1, y0: 0, y1: 0,
+            line: { color: "#2A3F5F", width: 1, dash: "dot" },
+        }],
+    });
+
+    Plotly.react("eqCurvePlot", [trace], layout, { displayModeBar: false, responsive: true });
+}
 
 function drawFilterBlockShapes() {
     const plot = el("filterOriginalSpectrogram");
