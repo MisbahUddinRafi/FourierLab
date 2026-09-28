@@ -280,6 +280,10 @@ function renderSpectrogram(
                 options.onSelect(evt.range.x, evt.range.y);
             });
         }
+
+        // if (containerId === "filterOriginalSpectrogram") {
+        //     wireFilterSelection();
+        // }
     });
 }
 
@@ -572,6 +576,14 @@ function initTabs() {
             document.querySelectorAll(".lab-panel").forEach((p) => p.classList.remove("active"));
             tabBtn.classList.add("active");
             el(tabBtn.dataset.target).classList.add("active");
+
+            if (tabBtn.dataset.target === "tabFilter" && state.lastAnalyze) {
+                const d = state.lastAnalyze;
+                const plot = el("filterOriginalSpectrogram");
+                if (plot && !plot.data) {
+                    renderSpectrogram("filterOriginalSpectrogram", d.freqs, d.times, d.magnitude_db, { selectable: false });
+                }
+            }
         });
     });
 }
@@ -597,8 +609,6 @@ function resetResults() {
         "sweepChart",
         "filterOriginalSpectrogram",
         "filterResultSpectrogram",
-        "filterOriginalWaveform",
-        "filterResultWaveform",
     ];
 
     plotIds.forEach((id) => {
@@ -647,6 +657,7 @@ function resetResults() {
     el("maskReadouts").innerHTML = "";
     el("retainReadout").innerHTML = "";
     el("filterReadouts").innerHTML = "";
+    el("filterResultSection").style.display = "none";
     resetFilterBlocks();
     el("metricsBody").innerHTML = "";
 
@@ -1262,6 +1273,7 @@ function addFilterBlock() {
     state.selectedFilterBlockId = block.id;
     updateFilterBlockDropdown();
     updateFilterBlockEditor();
+    drawFilterResultSpectrogram();
 }
 
 function deleteSelectedFilterBlock() {
@@ -1279,6 +1291,7 @@ function deleteSelectedFilterBlock() {
 
     updateFilterBlockDropdown();
     updateFilterBlockEditor();
+    drawFilterBlockShapes();
 }
 
 function resetFilterBlocks() {
@@ -1287,6 +1300,7 @@ function resetFilterBlocks() {
     state.lastFilter = null;
     updateFilterBlockDropdown();
     updateFilterBlockEditor();
+    drawFilterBlockShapes();
 }
 
 function updateFilterBlockDropdown() {
@@ -1392,6 +1406,7 @@ function wireFilterBlockControls() {
             if (!block) return;
             block[prop] = transform ? transform(el(inputId).value) : el(inputId).value;
             if (prop === "name") updateFilterBlockDropdown();
+            drawFilterBlockShapes();
         });
     };
 
@@ -1423,6 +1438,30 @@ function wireFilterBlockControls() {
         block.enabled = e.target.checked;
         updateFilterBlockDropdown();
     });
+}
+
+
+function drawFilterBlockShapes() {
+    const plot = el("filterOriginalSpectrogram");
+    if (!plot || !plot.data) return;
+
+    const shapes = state.filterBlocks.map(b => {
+        const color = b.enabled ? "#F5A623" : "#4A5568";
+        return {
+            type: "rect",
+            xref: "x", yref: "y",
+            x0: b.time_min,
+            x1: b.time_max !== null ? b.time_max : state.duration,
+            y0: b.freq_min,
+            y1: b.freq_max,
+            line: { color, width: 2 },
+            fillcolor: b.enabled ? "rgba(245,166,35,0.10)" : "rgba(74,85,104,0.10)",
+            layer: "above",
+            name: b.name,
+        };
+    });
+
+    Plotly.relayout(plot, { shapes });
 }
 
 async function applyFilterChain() {
@@ -1462,17 +1501,26 @@ async function applyFilterChain() {
         const data = await apiPost_json("/audio/filter", req);
         state.lastFilter = data;
 
-        const d = state.lastAnalyze;
+        // Show result section
+        el("filterResultSection").style.display = "block";
 
-        renderSpectrogram("filterOriginalSpectrogram", data.freqs, data.times, data.magnitude_db_original, { selectable: false });
-        renderSpectrogram("filterResultSpectrogram", data.freqs, data.times, data.magnitude_db_filtered, { selectable: false });
-        renderWaveform("filterOriginalWaveform", data.waveform_original);
-        renderWaveform("filterResultWaveform", data.waveform_filtered);
+        // Render filtered spectrogram
+        renderSpectrogram(
+            "filterResultSpectrogram",
+            data.freqs,
+            data.times,
+            data.magnitude_db_filtered,
+            { selectable: false }
+        );
 
+        drawFilterBlockShapes();
+
+        // Load filtered player
         const filteredPlayer = el("filteredPlayer");
         filteredPlayer.src = "data:audio/wav;base64," + data.audio_base64;
         filteredPlayer.load();
 
+        // SNR + MSE readouts
         el("filterReadouts").innerHTML = `
             <div class="readout">
                 <div class="readout-label">SNR</div>
@@ -1481,7 +1529,7 @@ async function applyFilterChain() {
             <div class="readout">
                 <div class="readout-label">MSE</div>
                 <div class="readout-value">${data.mse.toFixed(6)}</div>
-           </div>
+            </div>
         `;
 
         setStatus("Filter chain applied", "success");
@@ -1497,6 +1545,48 @@ async function saveFilterResult() {
     downloadBase64Audio(state.lastFilter.audio_base64, "filtered.wav");
     setStatus("Download started", "success");
 }
+
+
+// function wireFilterSelection() {
+//     const plot = el("filterOriginalSpectrogram");
+//     if (!plot) return;
+
+//     plot.on("plotly_selected", (evt) => {
+//         if (!evt || !evt.range) return;
+//         const tSpan = evt.range.x[1] - evt.range.x[0];
+//         const fSpan = evt.range.y[1] - evt.range.y[0];
+//         if (tSpan < 0.01 || fSpan < 1) return;   // ignore accidental clicks
+
+//         const tMin = Math.max(0, evt.range.x[0]);
+//         const tMax = Math.min(state.duration, evt.range.x[1]);
+//         const fMin = Math.max(0, evt.range.y[0]);
+//         const fMax = Math.min(state.sr / 2, evt.range.y[1]);
+
+//         // Always add a new block for each rectangle drawn
+//         addFilterBlock();
+
+//         // Now update its freq/time fields from the selection
+//         const block = getSelectedFilterBlock();
+//         if (!block) return;
+
+//         block.freq_min = Math.round(fMin);
+//         block.freq_max = Math.round(fMax);
+//         block.time_min = parseFloat(tMin.toFixed(3));
+//         block.time_max = parseFloat(tMax.toFixed(3));
+
+//         // Sync to DOM
+//         el("filterFreqMin").value = block.freq_min;
+//         el("filterFreqMax").value = block.freq_max;
+//         el("filterTimeMin").value = block.time_min;
+//         el("filterTimeMax").value = block.time_max;
+
+//         updateFilterBlockDropdown();
+
+//         // Clear Plotly's selection highlight so the canvas stays clean
+//         Plotly.restyle(plot, { selectedpoints: [null] });
+//     });
+// }
+
 
 
 /* ---------- main analyze flow ---------- */

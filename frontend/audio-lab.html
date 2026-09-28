@@ -450,8 +450,8 @@
                 </div>
 
                 <!-- =====================================================
-     FILTER & EQ TAB
-     ===================================================== -->
+                                        FILTER & EQ TAB
+                    ===================================================== -->
                 <div id="tabFilter" class="lab-panel">
 
                     <!-- ── CHAIN HEADER ─────────────────────────────── -->
@@ -475,152 +475,125 @@
                         </div>
                     </div>
 
+                    <!-- ── RESULT SPECTROGRAM (original) ───────────────── -->
+                    <div class="plot-card">
+                        <div class="plot-card-head">
+                            <div class="plot-card-title">Spectrogram</div>
+                        </div>
+                        <div id="filterOriginalSpectrogram"></div>
+                    </div>
+
                     <!-- ── SELECTED BLOCK EDITOR ────────────────────── -->
                     <div id="filterBlockEditor" class="mask-editor-card region-empty">
 
-                        <div class="mask-editor-lower" style="flex-direction: column; gap: 14px;">
-
-                            <!-- Row 1: name + type -->
-                            <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
-                                <div class="field" style="flex: 1; min-width: 120px;">
-                                    <label class="field-label" for="filterBlockName">Block name</label>
-                                    <input type="text" id="filterBlockName" class="text-input"
-                                        placeholder="e.g. High-pass 80 Hz" maxlength="48">
-                                </div>
-                                <div class="field" style="flex: 1; min-width: 140px;">
-                                    <label class="field-label" for="filterTypeSelect">Filter type</label>
-                                    <select id="filterTypeSelect">
-                                        <option value="lowpass">Low-pass</option>
-                                        <option value="highpass">High-pass</option>
-                                        <option value="bandpass">Band-pass</option>
-                                        <option value="notch">Notch</option>
-                                        <option value="custom_gain">Custom gain</option>
-                                    </select>
-                                </div>
+                        <!-- Row 1: name | type | enabled | delete -->
+                        <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                            <div class="field" style="flex: 2; min-width: 120px;">
+                                <label class="field-label" for="filterBlockName">Block name</label>
+                                <input type="text" id="filterBlockName" class="text-input"
+                                    placeholder="e.g. High-pass 80 Hz" maxlength="48">
                             </div>
-
-                            <!-- Row 2: frequency range -->
-                            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-                                <div class="field" style="flex: 1; min-width: 100px;">
-                                    <label class="field-label" for="filterFreqMin">
-                                        Freq min (Hz)
-                                    </label>
-                                    <input type="number" id="filterFreqMin" class="text-input" min="0" step="1"
-                                        value="0">
-                                </div>
-                                <div class="field" style="flex: 1; min-width: 100px;">
-                                    <label class="field-label" for="filterFreqMax">
-                                        Freq max (Hz)
-                                    </label>
-                                    <input type="number" id="filterFreqMax" class="text-input" min="0" step="1"
-                                        value="11025">
-                                </div>
+                            <div class="field" style="flex: 2; min-width: 130px;">
+                                <label class="field-label" for="filterTypeSelect">Filter type</label>
+                                <select id="filterTypeSelect">
+                                    <option value="lowpass">Low-pass</option>
+                                    <option value="highpass">High-pass</option>
+                                    <option value="bandpass">Band-pass</option>
+                                    <option value="notch">Notch</option>
+                                    <option value="custom_gain">Custom gain</option>
+                                </select>
                             </div>
-
-                            <!-- Row 3: time range -->
-                            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-                                <div class="field" style="flex: 1; min-width: 100px;">
-                                    <label class="field-label" for="filterTimeMin">
-                                        Time min (s)
-                                    </label>
-                                    <input type="number" id="filterTimeMin" class="text-input" min="0" step="0.01"
-                                        value="0">
-                                </div>
-                                <div class="field" style="flex: 1; min-width: 100px;">
-                                    <label class="field-label" for="filterTimeMax">
-                                        Time max (s) <span class="field-hint">— blank = full</span>
-                                    </label>
-                                    <input type="number" id="filterTimeMax" class="text-input" min="0" step="0.01"
-                                        placeholder="full duration">
-                                </div>
-                            </div>
-
-                            <!-- Row 4: gain (shown only for custom_gain) -->
-                            <div id="filterGainRow" class="field" style="display: none;">
-                                <label class="field-label" for="filterGainDb">
-                                    Gain (dB)
-                                </label>
-                                <input type="number" id="filterGainDb" class="text-input" step="0.5" value="0">
-                            </div>
-
-                            <!-- Row 5: enabled + delete -->
-                            <div class="mask-region-management">
-                                <label class="mask-enabled-option">
+                            <div class="field" style="flex: 0; min-width: 80px;">
+                                <label class="field-label">&nbsp;</label>
+                                <label class="mask-enabled-option"
+                                    style="height: 32px; display:flex; align-items:center;">
                                     <input type="checkbox" id="filterBlockEnabled" checked>
                                     <span>Enabled</span>
                                 </label>
+                            </div>
+                            <div class="field" style="flex: 0;">
+                                <label class="field-label">&nbsp;</label>
                                 <button id="deleteFilterBlockBtn" class="btn btn-danger btn-sm" type="button">
-                                    Delete block
+                                    Delete
                                 </button>
                             </div>
+                        </div>
 
+                        <!-- Row 2: freq min | freq max | time min | time max -->
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
+                            <div class="field" style="flex: 1; min-width: 90px;">
+                                <label class="field-label" for="filterFreqMin">Freq min (Hz)</label>
+                                <input type="number" id="filterFreqMin" class="text-input" min="0" step="1" value="0">
+                            </div>
+                            <div class="field" style="flex: 1; min-width: 90px;">
+                                <label class="field-label" for="filterFreqMax">Freq max (Hz)</label>
+                                <input type="number" id="filterFreqMax" class="text-input" min="0" step="1"
+                                    value="11025">
+                            </div>
+                            <div class="field" style="flex: 1; min-width: 90px;">
+                                <label class="field-label" for="filterTimeMin">Time min (s)</label>
+                                <input type="number" id="filterTimeMin" class="text-input" min="0" step="0.01"
+                                    value="0">
+                            </div>
+                            <div class="field" style="flex: 1; min-width: 90px;">
+                                <label class="field-label" for="filterTimeMax">Time max (s)</label>
+                                <input type="number" id="filterTimeMax" class="text-input" min="0" step="0.01"
+                                    placeholder="full">
+                            </div>
+                        </div>
+
+                        <!-- Gain row: only visible for custom_gain -->
+                        <div id="filterGainRow" style="display: none; margin-top: 10px;">
+                            <div class="field" style="max-width: 160px;">
+                                <label class="field-label" for="filterGainDb">Gain (dB)</label>
+                                <input type="number" id="filterGainDb" class="text-input" step="0.5" value="0">
+                            </div>
                         </div>
 
                         <!-- Type hint -->
-                        <div class="mask-overlap-note">
+                        <div class="mask-overlap-note" style="margin-top: 10px;">
                             <span class="mask-overlap-title">Filter types:</span>
-                            Low-pass keeps everything <em>below</em> Freq max.
-                            High-pass keeps everything <em>above</em> Freq min.
-                            Band-pass keeps the range between Freq min and max.
-                            Notch removes the range between Freq min and max.
+                            Low-pass keeps below Freq max. High-pass keeps above Freq min.
+                            Band-pass keeps Freq min–max. Notch removes Freq min–max.
                             Custom gain applies a dB offset over the selected region.
                         </div>
+
                     </div>
+
 
                     <!-- ── ACTIONS ───────────────────────────────────── -->
                     <div class="mask-actions">
                         <button id="applyFilterBtn" class="btn btn-primary btn-sm" type="button">
                             Apply chain
                         </button>
-                        <button id="saveFilterBtn" class="btn btn-ghost btn-sm" type="button">
-                            Download
-                        </button>
                     </div>
 
-                    <!-- ── RESULT SPECTROGRAMS ───────────────────────── -->
-                    <div class="retention-plots">
-                        <div class="plot-card retention-plot-card">
-                            <div class="plot-card-head">
-                                <div class="plot-card-title">Original spectrogram</div>
-                            </div>
-                            <div id="filterOriginalSpectrogram"></div>
-                        </div>
-                        <div class="plot-card retention-plot-card">
+                    <!-- ── RESULT SPECTROGRAM (filtered) ───────────────── -->
+                    <div id="filterResultSection" style="display:none;">
+                        <div class="plot-card" style="margin-top: 16px;">
                             <div class="plot-card-head">
                                 <div class="plot-card-title">Filtered spectrogram</div>
                             </div>
                             <div id="filterResultSpectrogram"></div>
                         </div>
-                    </div>
 
-                    <!-- ── RESULT WAVEFORMS ──────────────────────────── -->
-                    <div class="retention-plots">
-                        <div class="plot-card retention-plot-card">
-                            <div class="plot-card-head">
-                                <div class="plot-card-title">Original waveform</div>
+                        <div id="filterReadouts" class="readout-row"></div>
+
+                        <div class="player-row">
+                            <div class="player-block">
+                                <div class="player-block-label">Original audio</div>
+                                <audio id="filterOriginalPlayer" controls></audio>
                             </div>
-                            <div id="filterOriginalWaveform"></div>
-                        </div>
-                        <div class="plot-card retention-plot-card">
-                            <div class="plot-card-head">
-                                <div class="plot-card-title">Filtered waveform</div>
+                            <div class="player-block">
+                                <div class="player-block-label">Filtered audio</div>
+                                <audio id="filteredPlayer" controls></audio>
                             </div>
-                            <div id="filterResultWaveform"></div>
                         </div>
-                    </div>
 
-                    <!-- ── SNR READOUT ───────────────────────────────── -->
-                    <div id="filterReadouts" class="readout-row"></div>
-
-                    <!-- ── AUDIO PLAYERS ────────────────────────────── -->
-                    <div class="player-row">
-                        <div class="player-block">
-                            <div class="player-block-label">Original audio</div>
-                            <audio id="filterOriginalPlayer" controls></audio>
-                        </div>
-                        <div class="player-block">
-                            <div class="player-block-label">Filtered audio</div>
-                            <audio id="filteredPlayer" controls></audio>
+                        <div class="mask-actions" style="margin-top: 8px;">
+                            <button id="saveFilterBtn" class="btn btn-ghost btn-sm" type="button">
+                                Download filtered
+                            </button>
                         </div>
                     </div>
 
