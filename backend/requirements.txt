@@ -6,3 +6,6 @@ scipy
 librosa
 soundfile
 Pillow
+h5py
+pydicom
+nibabel

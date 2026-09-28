@@ -84,3 +84,52 @@ def frequency_axis(sr: int, n_fft: int = DEFAULT_N_FFT) -> np.ndarray:
 
 def time_axis(n_frames: int, sr: int, hop_length: int = DEFAULT_HOP_LENGTH) -> np.ndarray:
     return librosa.frames_to_time(np.arange(n_frames), sr=sr, hop_length=hop_length)
+
+
+
+
+def compute_mel_spectrogram(
+    magnitude: np.ndarray,
+    sr: int,
+    n_fft: int,
+    n_mels: int = 128,
+    fmin: float = 20.0,
+    fmax: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Project linear STFT magnitude onto a Mel filterbank.
+    Returns (mel_freqs_hz, mel_magnitude_db) where mel_freqs_hz
+    contains the center frequency of each Mel band in Hz —
+    so the frontend can still label the y-axis in Hz.
+    """
+    fmax = fmax or (sr / 2)
+
+    # Build Mel filterbank: shape (n_mels, n_fft//2 + 1)
+    mel_basis = librosa.filters.mel(
+        sr=sr,
+        n_fft=n_fft,
+        n_mels=n_mels,
+        fmin=fmin,
+        fmax=fmax,
+        norm="slaney",
+        htk=False,
+    )
+
+    # Apply filterbank: (n_mels, n_frames)
+    mel_magnitude = np.dot(mel_basis, magnitude)
+
+    # Convert to dB, ref = max of mel magnitude
+    mel_magnitude_db = librosa.amplitude_to_db(
+        mel_magnitude,
+        ref=np.max(mel_magnitude) + 1e-12,
+    )
+
+    # Center frequency of each Mel band in Hz (for y-axis labels)
+    mel_freqs = librosa.mel_frequencies(
+        n_mels=n_mels,
+        fmin=fmin,
+        fmax=fmax,
+        htk=False,
+    )
+
+    return mel_freqs, mel_magnitude_db

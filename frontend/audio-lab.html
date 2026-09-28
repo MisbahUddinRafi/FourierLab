@@ -22,6 +22,7 @@
             <a href="index.html">Home</a>
             <a href="image-lab.html">Image Lab</a>
             <a href="audio-lab.html" class="active">Audio Lab</a>
+            <a href="music-lab.html">Music Lab</a>
         </nav>
     </header>
 
@@ -145,6 +146,7 @@
                     <button class="lab-tab" data-target="tabMagPhase" disabled>Magnitude &amp; Phase</button>
                     <button class="lab-tab" data-target="tabMasking" disabled>Masking</button>
                     <button class="lab-tab" data-target="tabRetention" disabled>Retention</button>
+                    <button class="lab-tab" data-target="tabFilter" disabled>Filter &amp; EQ</button>
                     <button class="lab-tab" data-target="tabMetrics" disabled>Metrics</button>
                 </div>
 
@@ -255,35 +257,91 @@
                 </div>
 
                 <div id="tabMasking" class="lab-panel">
-                    <div class="plot-card">
-                        <div class="plot-card-head">
-                            <div class="plot-card-title">Drag a box on the spectrogram to select a region</div>
+
+                    <!-- MASKING WORKSPACE -->
+                    <div class="plot-card mask-workspace-card">
+                        <div class="mask-workspace-head">
+                            <div>
+                                <div class="plot-card-title">Time-Frequency Masking</div>
+                                <div class="mask-workspace-subtitle">
+                                    Draw freehand regions on the spectrogram. Click inside a region to select it.
+                                </div>
+                            </div>
+                            <div class="mask-selected-readout">
+                                Selected: <span id="maskSelectedRegion">None</span>
+                            </div>
                         </div>
+
+                        <div class="mask-mode-bar">
+                            <button id="drawRegionBtn" class="mask-mode-btn" type="button">
+                                Draw Region
+                            </button>
+                            <div id="maskModeHint" class="mask-mode-hint">
+                                Click Draw to start. Click inside a region to select it.
+                            </div>
+                        </div>
+
                         <div id="maskSpectrogram"></div>
                     </div>
 
-                    <div class="mask-controls">
-                        <div class="field"><label class="field-label">Freq min (Hz)</label><input type="number"
-                                id="freqMin" value="0"></div>
-                        <div class="field"><label class="field-label">Freq max (Hz)</label><input type="number"
-                                id="freqMax" value="11025"></div>
-                        <div class="field"><label class="field-label">Time min (s)</label><input type="number"
-                                id="timeMin" value="0" step="0.1"></div>
-                        <div class="field"><label class="field-label">Time max (s)</label><input type="number"
-                                id="timeMax" value="3" step="0.1"></div>
-                    </div>
-
-                    <div class="action-row">
-                        <div class="radio-group" style="flex-direction:row; gap:16px;">
-                            <label class="radio-option"><input type="radio" name="maskMode" value="remove" checked>
-                                Remove region</label>
-                            <label class="radio-option"><input type="radio" name="maskMode" value="isolate"> Isolate
-                                region</label>
+                    <!-- REGION SELECTOR -->
+                    <div class="mask-region-panel">
+                        <div class="mask-region-panel-head">
+                            <div class="field-label">Regions</div>
                         </div>
-                        <button id="applyMaskBtn" class="btn btn-primary btn-sm">Apply Mask</button>
-                        <button id="saveMaskBtn" class="btn btn-ghost btn-sm">Save to gallery</button>
+                        <div id="maskRegionDropdown" class="mask-region-dropdown">
+                            <button id="maskRegionDropdownBtn" class="mask-region-dropdown-btn" type="button">
+                                <span id="maskRegionDropdownLabel">No regions</span>
+                                <span class="mask-dropdown-chevron">⌄</span>
+                            </button>
+                            <div id="maskRegionDropdownMenu" class="mask-region-dropdown-menu">
+                                <div class="mask-region-empty">No regions yet. Click Draw to start.</div>
+                            </div>
+                        </div>
                     </div>
 
+                    <!-- SELECTED REGION CONTROLS -->
+                    <div class="mask-editor-card region-empty">
+                        <div class="mask-editor-lower">
+                            <div class="mask-operation-block">
+                                <div class="field-label">Operation</div>
+                                <div class="mask-operation-toggle">
+                                    <label class="mask-operation-option">
+                                        <input type="radio" name="maskMode" value="remove" checked>
+                                        <span>Remove</span>
+                                    </label>
+                                    <label class="mask-operation-option">
+                                        <input type="radio" name="maskMode" value="isolate">
+                                        <span>Isolate</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="mask-region-management">
+                                <label class="mask-enabled-option">
+                                    <input type="checkbox" id="maskRegionEnabled" checked>
+                                    <span>Enabled</span>
+                                </label>
+                                <button id="deleteMaskRegionBtn" class="btn btn-danger btn-sm" type="button">
+                                    Delete Region
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="mask-overlap-note">
+                            <span class="mask-overlap-title">Overlapping regions:</span>
+                            Remove takes priority over Isolate.
+                            <span class="mask-overlap-rule">Isolate + Isolate → Isolate</span>
+                            <span class="mask-overlap-rule">Remove + anything → Remove</span>
+                        </div>
+                    </div>
+
+                    <!-- MASK ACTIONS -->
+                    <div class="mask-actions">
+                        <button id="applyMaskBtn" class="btn btn-primary btn-sm" type="button">Apply Mask</button>
+                        <button id="saveMaskBtn" class="btn btn-ghost btn-sm" type="button">Download</button>
+                    </div>
+
+                    <!-- RESULT -->
                     <div class="plot-card">
                         <div class="plot-card-head">
                             <div class="plot-card-title">Result spectrogram</div>
@@ -298,12 +356,12 @@
                             <div class="player-block-label">Original audio</div>
                             <audio id="maskOriginalPlayer" controls></audio>
                         </div>
-
                         <div class="player-block">
                             <div class="player-block-label">Masked reconstruction</div>
                             <audio id="maskedPlayer" controls></audio>
                         </div>
                     </div>
+
                 </div>
 
                 <div id="tabRetention" class="lab-panel">
@@ -340,7 +398,7 @@
                             </button>
 
                             <button id="saveRetainBtn" class="btn btn-ghost btn-sm">
-                                Save to gallery
+                                Download
                             </button>
 
                             <button id="sweepBtn" class="btn btn-outline-cyan btn-sm">
@@ -389,6 +447,196 @@
                         </div>
                         <div id="sweepChart"></div>
                     </div>
+                </div>
+
+                <!-- =====================================================
+                                        FILTER & EQ TAB
+                    ===================================================== -->
+                <div id="tabFilter" class="lab-panel">
+
+                    <!-- ── CHAIN HEADER ─────────────────────────────── -->
+                    <div class="mask-region-panel">
+                        <div class="mask-region-panel-head">
+                            <div class="field-label">Filter chain</div>
+                            <button id="addFilterBlockBtn" class="btn btn-outline-cyan btn-sm" type="button">
+                                + Add block
+                            </button>
+                        </div>
+
+                        <!-- Dropdown list of all blocks -->
+                        <div id="filterBlockDropdown" class="mask-region-dropdown">
+                            <button id="filterBlockDropdownBtn" class="mask-region-dropdown-btn" type="button">
+                                <span id="filterBlockDropdownLabel">No blocks</span>
+                                <span class="mask-dropdown-chevron">⌄</span>
+                            </button>
+                            <div id="filterBlockDropdownMenu" class="mask-region-dropdown-menu">
+                                <div class="mask-region-empty">No blocks yet. Click + Add block to start.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── RESULT SPECTROGRAM (original) ───────────────── -->
+                    <div class="plot-card">
+                        <div class="plot-card-head">
+                            <div class="plot-card-title">Spectrogram</div>
+                        </div>
+                        <div id="filterOriginalSpectrogram"></div>
+                    </div>
+
+                    <!-- ── SELECTED BLOCK EDITOR ────────────────────── -->
+                    <div id="filterBlockEditor" class="mask-editor-card region-empty">
+
+                        <!-- Row 1: name | type | enabled | delete -->
+                        <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                            <div class="field" style="flex: 2; min-width: 120px;">
+                                <label class="field-label" for="filterBlockName">Block name</label>
+                                <input type="text" id="filterBlockName" class="text-input"
+                                    placeholder="e.g. High-pass 80 Hz" maxlength="48">
+                            </div>
+                            <div class="field" style="flex: 2; min-width: 130px;">
+                                <label class="field-label" for="filterTypeSelect">Filter type</label>
+                                <select id="filterTypeSelect">
+                                    <option value="lowpass">Low-pass</option>
+                                    <option value="highpass">High-pass</option>
+                                    <option value="bandpass">Band-pass</option>
+                                    <option value="notch">Notch</option>
+                                    <option value="custom_gain">Custom gain</option>
+                                </select>
+                            </div>
+                            <div class="field" style="flex: 0; min-width: 80px;">
+                                <label class="field-label">&nbsp;</label>
+                                <label class="mask-enabled-option"
+                                    style="height: 32px; display:flex; align-items:center;">
+                                    <input type="checkbox" id="filterBlockEnabled" checked>
+                                    <span>Enabled</span>
+                                </label>
+                            </div>
+                            <div class="field" style="flex: 0;">
+                                <label class="field-label">&nbsp;</label>
+                                <button id="deleteFilterBlockBtn" class="btn btn-danger btn-sm" type="button">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Row 2: freq min | freq max | time min | time max -->
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
+                            <div class="field" style="flex: 1; min-width: 90px;">
+                                <label class="field-label" for="filterFreqMin">Freq min (Hz)</label>
+                                <input type="number" id="filterFreqMin" class="text-input" min="0" step="1" value="0">
+                            </div>
+                            <div class="field" style="flex: 1; min-width: 90px;">
+                                <label class="field-label" for="filterFreqMax">Freq max (Hz)</label>
+                                <input type="number" id="filterFreqMax" class="text-input" min="0" step="1"
+                                    value="11025">
+                            </div>
+                            <div class="field" style="flex: 1; min-width: 90px;">
+                                <label class="field-label" for="filterTimeMin">Time min (s)</label>
+                                <input type="number" id="filterTimeMin" class="text-input" min="0" step="0.01"
+                                    value="0">
+                            </div>
+                            <div class="field" style="flex: 1; min-width: 90px;">
+                                <label class="field-label" for="filterTimeMax">Time max (s)</label>
+                                <input type="number" id="filterTimeMax" class="text-input" min="0" step="0.01"
+                                    placeholder="full">
+                            </div>
+                        </div>
+
+                        <!-- Gain row: only visible for custom_gain -->
+                        <!-- Gain row: only visible for custom_gain -->
+                        <div id="filterGainRow" style="display: none; margin-top: 10px;">
+                            <div class="field">
+                                <label class="field-label" for="filterGainDb">
+                                    Gain: <span id="filterGainLabel">0 dB</span>
+                                </label>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <input type="range" id="filterGainSlider" min="-24" max="24" step="0.5" value="0"
+                                        style="flex: 1; min-width: 140px;">
+                                    <input type="number" id="filterGainDb" class="text-input" step="0.5" value="0"
+                                        style="width: 72px;">
+                                </div>
+                            </div>
+                            <div class="field" style="margin-top: 8px;">
+                                <label class="field-label">Frequency band presets</label>
+                                <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;">
+                                    <button class="btn btn-outline-cyan btn-sm eq-preset-btn" type="button"
+                                        data-fmin="20" data-fmax="250"
+                                        data-label="Sub-bass (20–250 Hz)">Sub-bass</button>
+                                    <button class="btn btn-outline-cyan btn-sm eq-preset-btn" type="button"
+                                        data-fmin="250" data-fmax="500" data-label="Bass (250–500 Hz)">Bass</button>
+                                    <button class="btn btn-outline-cyan btn-sm eq-preset-btn" type="button"
+                                        data-fmin="500" data-fmax="2000"
+                                        data-label="Midrange (500–2000 Hz)">Midrange</button>
+                                    <button class="btn btn-outline-cyan btn-sm eq-preset-btn" type="button"
+                                        data-fmin="2000" data-fmax="6000"
+                                        data-label="Presence (2–6 kHz)">Presence</button>
+                                    <button class="btn btn-outline-cyan btn-sm eq-preset-btn" type="button"
+                                        data-fmin="6000" data-fmax="11025"
+                                        data-label="Brilliance (6–11 kHz)">Brilliance</button>
+                                </div>
+                                <div id="eqPresetHint" style="font-size:11px; color:#5A7A9A; margin-top:5px;">
+                                    Click a preset to set the frequency range, then adjust gain above.
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Type hint -->
+                        <div class="mask-overlap-note" style="margin-top: 10px;">
+                            <span class="mask-overlap-title">Filter types:</span>
+                            Low-pass keeps below Freq max. High-pass keeps above Freq min.
+                            Band-pass keeps Freq min–max. Notch removes Freq min–max.
+                            Custom gain applies a dB offset over the selected region.
+                        </div>
+
+                    </div>
+
+                    <!-- ── EQ CURVE PREVIEW ──────────────────────────── -->
+                    <div class="plot-card" id="eqCurveCard" style="margin-top: 16px; display: none;">
+                        <div class="plot-card-head">
+                            <div class="plot-card-title">EQ Curve Preview</div>
+                            <div class="plot-card-subtitle" style="font-size:11px; color:#5A7A9A;">
+                                Live preview of the combined frequency response
+                            </div>
+                        </div>
+                        <div id="eqCurvePlot"></div>
+                    </div>
+
+                    <!-- ── ACTIONS ───────────────────────────────────── -->
+                    <div class="mask-actions">
+                        <button id="applyFilterBtn" class="btn btn-primary btn-sm" type="button">
+                            Apply chain
+                        </button>
+                    </div>
+
+                    <!-- ── RESULT SPECTROGRAM (filtered) ───────────────── -->
+                    <div id="filterResultSection" style="display:none;">
+                        <div class="plot-card" style="margin-top: 16px;">
+                            <div class="plot-card-head">
+                                <div class="plot-card-title">Filtered spectrogram</div>
+                            </div>
+                            <div id="filterResultSpectrogram"></div>
+                        </div>
+
+                        <div id="filterReadouts" class="readout-row"></div>
+
+                        <div class="player-row">
+                            <div class="player-block">
+                                <div class="player-block-label">Original audio</div>
+                                <audio id="filterOriginalPlayer" controls></audio>
+                            </div>
+                            <div class="player-block">
+                                <div class="player-block-label">Filtered audio</div>
+                                <audio id="filteredPlayer" controls></audio>
+                            </div>
+                        </div>
+
+                        <div class="mask-actions" style="margin-top: 8px;">
+                            <button id="saveFilterBtn" class="btn btn-ghost btn-sm" type="button">
+                                Download filtered
+                            </button>
+                        </div>
+                    </div>
+
                 </div>
 
                 <div id="tabMetrics" class="lab-panel">

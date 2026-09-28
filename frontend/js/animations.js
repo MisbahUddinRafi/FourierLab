@@ -108,3 +108,57 @@ function drawSpectrumBars(canvasId) {
   }
   frame();
 }
+
+
+
+
+/** animation for music lab */
+
+function drawMusicSignal(canvasId) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const { ctx, w, h } = setupCanvas(canvas);
+  const baseline = h * 0.72;
+  let t = 0;
+
+  const notes = ["♪", "♫", "♩"];
+  const particles = Array.from({ length: 6 }, (_, i) => ({
+    x: (i / 6) * w + w * 0.08,
+    delay: i * 0.9,
+    glyph: notes[i % notes.length],
+  }));
+
+  function frame() {
+    ctx.clearRect(0, 0, w, h);
+
+    // Baseline signal trace
+    ctx.beginPath();
+    ctx.strokeStyle = "#FFB454";
+    ctx.lineWidth = 2;
+    ctx.shadowColor = "rgba(255,180,84,0.45)";
+    ctx.shadowBlur = 6;
+    for (let x = 0; x <= w; x += 2) {
+      const p = x / w;
+      const y = baseline + Math.sin(p * 18 + t) * (h * 0.09);
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Notes rising off the waveform
+    ctx.font = "16px sans-serif";
+    ctx.textAlign = "center";
+    particles.forEach((p) => {
+      const cycle = ((t * 0.6 + p.delay) % 5) / 5; // 0 -> 1
+      const y = baseline - cycle * (h * 0.62);
+      const opacity = Math.sin(cycle * Math.PI);
+
+      ctx.fillStyle = `rgba(255,180,84,${(opacity * 0.85).toFixed(2)})`;
+      ctx.fillText(p.glyph, p.x, y);
+    });
+
+    t += 0.03;
+    if (!REDUCED_MOTION) requestAnimationFrame(frame);
+  }
+  frame();
+}

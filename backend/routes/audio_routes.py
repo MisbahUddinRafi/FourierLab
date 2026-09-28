@@ -15,8 +15,13 @@ from audio_core.stft_engine import (
     magnitude_to_db,
     frequency_axis,
     time_axis,
+    compute_mel_spectrogram, 
 )
-from audio_core.masking import build_time_freq_mask, apply_mask
+from audio_core.masking import (
+    build_time_freq_mask,
+    build_multi_region_mask,
+    apply_mask,
+)
 from audio_core.reconstruction import (
     retain_low_frequencies,
     retain_top_magnitude,
@@ -80,6 +85,104 @@ def waveform_envelope(y: np.ndarray, sr: int, n_buckets: int = 1200):
     }
 
 
+def apply_filter_block(
+    D: np.ndarray,
+    block: "FilterBlock",
+    sr: int,
+    n_fft: int,
+    hop_length: int,
+    duration: float,
+) -> np.ndarray:
+    """
+    Apply one filter block to an STFT matrix D (complex).
+    Returns a new STFT matrix with the filter applied.
+
+    All filters work by building a float gain mask (0.0 – 1.0 for
+    pass/stop filters, arbitrary positive for custom_gain) and
+    multiplying it into D.
+
+    A 2-bin cosine taper is applied at every cutoff edge to avoid
+    the ringing that a hard brick-wall cutoff produces.
+    """
+    n_freq_bins, n_frames = D.shape
+    freqs = frequency_axis(sr=sr, n_fft=n_fft)          # shape (n_freq_bins,)
+    times = time_axis(n_frames, sr=sr, hop_length=hop_length)  # shape (n_frames,)
+
+    t_max = block.time_max if block.time_max is not None else duration
+
+    # ---- time mask (which frames are affected) -------------------------
+    time_in = (times >= block.time_min) & (times <= t_max)  # shape (n_frames,)
+
+    # ---- frequency gain vector ----------------------------------------
+    freq_gain = np.ones(n_freq_bins, dtype=np.float64)
+
+    def taper(mask: np.ndarray) -> np.ndarray:
+        """
+        Smooth the edges of a 0/1 boolean freq mask with a cosine
+        taper over the 2 neighbouring bins on each transition.
+        """
+        gain = mask.astype(np.float64)
+        for i in range(1, len(gain)):
+            if gain[i] != gain[i - 1]:
+                # rising edge
+                if gain[i] > gain[i - 1]:
+                    if i + 1 < len(gain):
+                        gain[i] = 0.5 - 0.5 * np.cos(np.pi * 0.5)
+                # falling edge
+                else:
+                    gain[i - 1] = 0.5 - 0.5 * np.cos(np.pi * 0.5)
+        return gain
+
+    ft = block.filter_type
+
+    if ft == "lowpass":
+        pass_mask = freqs <= block.freq_max
+        freq_gain = taper(pass_mask)
+
+    elif ft == "highpass":
+        pass_mask = freqs >= block.freq_min
+        freq_gain = taper(pass_mask)
+
+    elif ft == "bandpass":
+        pass_mask = (freqs >= block.freq_min) & (freqs <= block.freq_max)
+        freq_gain = taper(pass_mask)
+
+    elif ft == "notch":
+        # Notch = inverse of bandpass: attenuate the band, keep the rest
+        stop_mask = (freqs >= block.freq_min) & (freqs <= block.freq_max)
+        freq_gain = taper(~stop_mask)
+
+    elif ft == "custom_gain":
+        region_mask = (freqs >= block.freq_min) & (freqs <= block.freq_max)
+        linear_gain = 10.0 ** (block.gain_db / 20.0)
+        # Build a smooth bell taper around the selected band edges
+        # so the gain doesn't jump hard at freq_min / freq_max
+        gain_curve = np.ones(n_freq_bins, dtype=np.float64)
+        gain_curve[region_mask] = linear_gain
+        # Taper the transition: blend over 3 bins at each edge
+        indices = np.where(region_mask)[0]
+        if len(indices) > 0:
+            for edge_idx in [indices[0], indices[-1]]:
+                for offset, weight in [(0, 0.5), (-1 if edge_idx == indices[-1] else 1, 0.75)]:
+                    neighbour = edge_idx + offset
+                    if 0 <= neighbour < n_freq_bins and not region_mask[neighbour]:
+                        gain_curve[neighbour] = 1.0 + (linear_gain - 1.0) * weight
+        freq_gain = gain_curve
+
+    else:
+        raise HTTPException(400, f"Unknown filter_type '{ft}'.")
+
+    # ---- build 2-D gain matrix and apply ------------------------------
+    # freq_gain: (n_freq_bins,)  →  column vector
+    # time_in:   (n_frames,)     →  row vector
+    # combined:  (n_freq_bins, n_frames)
+    gain_matrix = np.outer(freq_gain, time_in.astype(np.float64))
+
+    # Bins outside the time range keep gain = 1.0
+    gain_matrix += np.outer(np.ones(n_freq_bins), (~time_in).astype(np.float64))
+
+    return D * gain_matrix
+
 class AnalyzeRequest(BaseModel):
     source: str
     sr: int = 22050
@@ -91,13 +194,25 @@ class ComponentRequest(AnalyzeRequest):
     mode: str  # "magnitude_only" | "phase_only"
 
 
-class MaskRequest(AnalyzeRequest):
-    freq_min: float
-    freq_max: float
-    time_min: float
-    time_max: float
-    mode: str  # "remove" | "isolate"
+class MaskVertex(BaseModel):
+    t: float  # time in seconds
+    f: float  # frequency in Hz
 
+
+class MaskRegion(BaseModel):
+    vertices: list[MaskVertex]  # polygon vertices, min 3
+    mode: str                   # "remove" | "isolate"
+    enabled: bool = True
+
+
+class MaskRequest(AnalyzeRequest):
+    regions: list[MaskRegion] | None = None
+    # Legacy single-region fields kept for backward compat
+    freq_min: float | None = None
+    freq_max: float | None = None
+    time_min: float | None = None
+    time_max: float | None = None
+    mode: str | None = None
 
 class RetainRequest(AnalyzeRequest):
     strategy: str  # "low_frequency" | "top_magnitude"
@@ -111,6 +226,21 @@ class SweepRequest(AnalyzeRequest):
 class SaveRequest(BaseModel):
     audio_base64: str
     label: str = "result"
+
+class FilterBlock(BaseModel):
+    id: int
+    name: str = ""
+    filter_type: str        # "lowpass" | "highpass" | "bandpass" | "notch" | "custom_gain"
+    freq_min: float = 0.0
+    freq_max: float = 11025.0
+    time_min: float = 0.0
+    time_max: float | None = None   # None = full duration
+    gain_db: float = 0.0            # used by custom_gain; ignored by pass filters
+    enabled: bool = True
+
+
+class FilterRequest(AnalyzeRequest):
+    blocks: list[FilterBlock]
 
 
 @router.post("/upload")
@@ -153,6 +283,13 @@ def analyze(req: AnalyzeRequest):
     freqs = frequency_axis(sr=sr, n_fft=req.n_fft)
     times = time_axis(D.shape[1], sr=sr, hop_length=req.hop_length)
 
+    # Mel spectrogram
+    from audio_core.stft_engine import compute_mel_spectrogram
+    mel_freqs, mel_magnitude_db = compute_mel_spectrogram(
+        magnitude, sr=sr, n_fft=req.n_fft, n_mels=128,
+        fmin=20.0, fmax=sr / 2,
+    )
+
     return {
         "sr": sr,
         "duration": round(len(y) / sr, 3),
@@ -161,8 +298,10 @@ def analyze(req: AnalyzeRequest):
         "times": np.round(times, 4).tolist(),
         "magnitude_db": np.round(magnitude_db, 1).tolist(),
         "phase": np.round(phase, 3).tolist(),
+        # Mel
+        "mel_freqs": np.round(mel_freqs, 1).tolist(),
+        "mel_magnitude_db": np.round(mel_magnitude_db, 1).tolist(),
     }
-
 
 @router.post("/component")
 def reconstruct_component(req: ComponentRequest):
@@ -187,29 +326,172 @@ def reconstruct_component(req: ComponentRequest):
 def mask_audio(req: MaskRequest):
     path = resolve_source(req.source)
     y, sr = load_audio(str(path), target_sr=req.sr, mono=True)
-    D = compute_stft(y, n_fft=req.n_fft, hop_length=req.hop_length, win_length=req.n_fft)
 
-    keep_mask = build_time_freq_mask(
-        D.shape, sr, req.n_fft, req.hop_length,
-        freq_range_hz=(req.freq_min, req.freq_max),
-        time_range_sec=(req.time_min, req.time_max),
-        mode=req.mode,
+    D = compute_stft(
+        y,
+        n_fft=req.n_fft,
+        hop_length=req.hop_length,
+        win_length=req.n_fft,
     )
+
+    # ---------------------------------------------------------
+    # New multi-region masking
+    # ---------------------------------------------------------
+    if req.regions is not None:
+        if len(req.regions) == 0:
+            raise HTTPException(400, "At least one masking region is required.")
+
+        duration = len(y) / sr
+        nyquist = sr / 2
+        regions = []
+
+        for region in req.regions:
+            if region.mode not in {"remove", "isolate"}:
+                raise HTTPException(400, "Region mode must be 'remove' or 'isolate'.")
+
+            if len(region.vertices) < 3:
+                raise HTTPException(400, "Each polygon region must have at least 3 vertices.")
+
+            for v in region.vertices:
+                if v.t < 0 or v.t > duration:
+                    raise HTTPException(400, f"Vertex time {v.t:.3f}s out of range [0, {duration:.3f}s].")
+                if v.f < 0 or v.f > nyquist:
+                    raise HTTPException(400, f"Vertex frequency {v.f:.1f}Hz out of range [0, {nyquist:.1f}Hz].")
+
+            regions.append({
+                "vertices": [[v.t, v.f] for v in region.vertices],
+                "mode": region.mode,
+                "enabled": region.enabled,
+            })
+
+        keep_mask = build_multi_region_mask(
+            shape=D.shape,
+            sr=sr,
+            n_fft=req.n_fft,
+            hop_length=req.hop_length,
+            regions=regions,
+        )
+    # ---------------------------------------------------------
+    # Legacy single-region masking
+    #
+    # This keeps the existing frontend/API working.
+    # ---------------------------------------------------------
+    else:
+
+        required_legacy_fields = [
+            req.freq_min,
+            req.freq_max,
+            req.time_min,
+            req.time_max,
+            req.mode,
+        ]
+
+        if any(value is None for value in required_legacy_fields):
+            raise HTTPException(
+                400,
+                "Either 'regions' or all legacy masking fields "
+                "must be provided."
+            )
+
+        if req.mode not in {"remove", "isolate"}:
+            raise HTTPException(
+                400,
+                "mode must be 'remove' or 'isolate'"
+            )
+
+        if req.freq_min < 0:
+            raise HTTPException(
+                400,
+                "Frequency minimum cannot be negative."
+            )
+
+        if req.freq_max <= req.freq_min:
+            raise HTTPException(
+                400,
+                "Frequency maximum must be greater than frequency minimum."
+            )
+
+        if req.freq_max > sr / 2:
+            raise HTTPException(
+                400,
+                f"Frequency maximum cannot exceed Nyquist frequency "
+                f"({sr / 2:.0f} Hz)."
+            )
+
+        if req.time_min < 0:
+            raise HTTPException(
+                400,
+                "Time minimum cannot be negative."
+            )
+
+        if req.time_max <= req.time_min:
+            raise HTTPException(
+                400,
+                "Time maximum must be greater than time minimum."
+            )
+
+        duration = len(y) / sr
+
+        if req.time_max > duration:
+            raise HTTPException(
+                400,
+                f"Time maximum cannot exceed audio duration "
+                f"({duration:.3f} s)."
+            )
+
+        keep_mask = build_time_freq_mask(
+            D.shape,
+            sr,
+            req.n_fft,
+            req.hop_length,
+            freq_range_hz=(req.freq_min, req.freq_max),
+            time_range_sec=(req.time_min, req.time_max),
+            mode=req.mode,
+        )
+
+    # ---------------------------------------------------------
+    # Apply final mask
+    # ---------------------------------------------------------
+
     D_masked = apply_mask(D, keep_mask)
-    y_masked = compute_istft(D_masked, req.hop_length, req.n_fft, length=len(y))
+
+    y_masked = compute_istft(
+        D_masked,
+        req.hop_length,
+        req.n_fft,
+        length=len(y),
+    )
 
     magnitude_full, _ = magnitude_phase(D)
-    magnitude_db_masked = magnitude_to_db(np.abs(D_masked), ref=np.max(magnitude_full) + 1e-12)
 
-    audio_b64 = base64.b64encode(waveform_to_wav_bytes(y_masked, sr)).decode("ascii")
+    magnitude_db_masked = magnitude_to_db(
+        np.abs(D_masked),
+        ref=np.max(magnitude_full) + 1e-12,
+    )
+
+    audio_b64 = base64.b64encode(
+        waveform_to_wav_bytes(y_masked, sr)
+    ).decode("ascii")
+
     return {
         "audio_base64": audio_b64,
-        "magnitude_db": np.round(magnitude_db_masked, 1).tolist(),
-        "snr_db": sanitize_metric(snr_db(y, y_masked)),
-        "mse": sanitize_metric(mse(y, y_masked)),
-        "spectral_convergence": sanitize_metric(spectral_convergence(magnitude_full, np.abs(D_masked))),
+        "magnitude_db": np.round(
+            magnitude_db_masked,
+            1,
+        ).tolist(),
+        "snr_db": sanitize_metric(
+            snr_db(y, y_masked)
+        ),
+        "mse": sanitize_metric(
+            mse(y, y_masked)
+        ),
+        "spectral_convergence": sanitize_metric(
+            spectral_convergence(
+                magnitude_full,
+                np.abs(D_masked),
+            )
+        ),
     }
-
 
 @router.post("/retain")
 def retain_audio(req: RetainRequest):
@@ -258,3 +540,59 @@ def save_result(req: SaveRequest):
     filename = f"{safe_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
     (SAVED_DIR / filename).write_bytes(audio_bytes)
     return {"filename": filename}
+
+
+
+@router.post("/filter")
+def filter_audio(req: FilterRequest):
+    if not req.blocks:
+        raise HTTPException(400, "At least one filter block is required.")
+
+    path = resolve_source(req.source)
+    y, sr = load_audio(str(path), target_sr=req.sr, mono=True)
+    duration = len(y) / sr
+
+    D = compute_stft(y, n_fft=req.n_fft, hop_length=req.hop_length, win_length=req.n_fft)
+    magnitude_orig, _ = magnitude_phase(D)
+
+    # Chain: apply each enabled block in order
+    D_filtered = D.copy()
+    for block in req.blocks:
+        if not block.enabled:
+            continue
+        D_filtered = apply_filter_block(
+            D_filtered, block, sr, req.n_fft, req.hop_length, duration
+        )
+        
+    y_filtered = compute_istft(D_filtered, req.hop_length, req.n_fft, length=len(y))
+
+    # Preserve the gain that was intentionally applied — clip instead of normalize.
+    # Without this, waveform_to_wav_bytes normalizes peak amplitude and
+    # the custom_gain effect disappears in the output audio.
+    peak = np.max(np.abs(y_filtered))
+    if peak > 1.0:
+        y_filtered = y_filtered / peak * 0.98   # only reduce if clipping, never amplify back
+
+    magnitude_filtered = np.abs(D_filtered)
+    magnitude_db_filtered = magnitude_to_db(
+        magnitude_filtered,
+        ref=np.max(magnitude_orig) + 1e-12,
+    )
+
+    freqs = frequency_axis(sr=sr, n_fft=req.n_fft)
+    times = time_axis(D.shape[1], sr=sr, hop_length=req.hop_length)
+
+    audio_b64 = base64.b64encode(waveform_to_wav_bytes(y_filtered, sr)).decode("ascii")
+
+    return {
+        "audio_base64": audio_b64,
+        "waveform_original": waveform_envelope(y, sr),
+        "waveform_filtered": waveform_envelope(y_filtered, sr),
+        "freqs": np.round(freqs, 1).tolist(),
+        "times": np.round(times, 4).tolist(),
+        "magnitude_db_original": np.round(magnitude_to_db(magnitude_orig), 1).tolist(),
+        "magnitude_db_filtered": np.round(magnitude_db_filtered, 1).tolist(),
+        "snr_db": sanitize_metric(snr_db(y, y_filtered)),
+        "mse": sanitize_metric(mse(y, y_filtered)),
+        "duration": round(duration, 3),
+    }
