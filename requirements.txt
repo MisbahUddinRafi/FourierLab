@@ -9,3 +9,5 @@ Pillow
 h5py
 pydicom
 nibabel
+anyio
+demucs
