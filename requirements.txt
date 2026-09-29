@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-multipart
+numpy
+scipy
+librosa
+soundfile
+Pillow
+h5py
+pydicom
+nibabel
